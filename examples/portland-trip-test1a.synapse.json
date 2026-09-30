@@ -1,0 +1,289 @@
+{
+  "format": "synapse-flow/harness",
+  "version": 2,
+  "name": "Portland Trip Test1A",
+  "nodes": [
+    {
+      "id": "5495207b-e4d8-40f2-96d2-66ae234aed6a",
+      "type": "synapseNode",
+      "position": {
+        "x": 889.2505123190955,
+        "y": 250.24756837563768
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Luna Check Events",
+        "description": "Uses an LLM to reason over its event and allowed context.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "Do an online search for Portland Oregon's current events that may warrant a trip. ",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700,
+          "requireToolCall": false,
+          "outputMode": "text"
+        }
+      }
+    },
+    {
+      "id": "5920aaf5-a83e-47b0-b08d-d54f9420db05",
+      "type": "synapseNode",
+      "position": {
+        "x": 75.80573524490626,
+        "y": 482.94743296356046
+      },
+      "data": {
+        "kind": "user",
+        "label": "User Input",
+        "description": "Waits for human prose or simulates the user with an LLM.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "mode": "manual",
+          "systemPrompt": "Act as the human participant in this simulation. Respond naturally in prose and do not output JSON, code, or structured data.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700
+        }
+      }
+    },
+    {
+      "id": "5dffe654-bf2e-4ac1-9201-0b5e75213487",
+      "type": "synapseNode",
+      "position": {
+        "x": 934.2632667816989,
+        "y": 505.855709788278
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Luna Judgement",
+        "description": "Uses an LLM to reason over its event and allowed context.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "Make an assessment from the provided agent research as to weather today is a good day to go visit Portland Oregon! ",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700,
+          "requireToolCall": false,
+          "outputMode": "text"
+        }
+      }
+    },
+    {
+      "id": "76036165-38f8-41a3-abda-1dda530575b8",
+      "type": "synapseNode",
+      "position": {
+        "x": 627.2119774117974,
+        "y": 84.66493588820384
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Luna Check Traffic",
+        "description": "Uses an LLM to reason over its event and allowed context.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "Do an online search for Portland Oregon's current traffic conditions. ",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700,
+          "requireToolCall": false,
+          "outputMode": "text"
+        }
+      }
+    },
+    {
+      "id": "7ac11b70-2bed-439e-883b-f86e48657639",
+      "type": "synapseNode",
+      "position": {
+        "x": 568.5346367730466,
+        "y": 650.5395634180746
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Memory",
+        "description": "Stores isolated state through explicit read and write edges.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": ""
+        }
+      }
+    },
+    {
+      "id": "d3276823-f511-4c4d-a034-c411fb8e498f",
+      "type": "synapseNode",
+      "position": {
+        "x": 1213.9853837993053,
+        "y": 509.8747057224392
+      },
+      "data": {
+        "kind": "output",
+        "label": "Output",
+        "description": "Captures the final event for inspection.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {}
+      }
+    },
+    {
+      "id": "d8a01cca-ee20-440a-a887-31e6d7ed2b89",
+      "type": "synapseNode",
+      "position": {
+        "x": 574.9650302677042,
+        "y": 389.3048276976087
+      },
+      "data": {
+        "kind": "search",
+        "label": "API Search",
+        "description": "Searches the live web or a configured public data API when called by Luna.",
+        "inputType": "tool_request",
+        "outputType": "tool_result",
+        "config": {
+          "provider": "web",
+          "functionName": "search_information",
+          "functionDescription": "Search for current or external information when the answer is not already available in the event or connected memory.",
+          "usageInstructions": "Use specific search queries. Base factual claims on the returned evidence and preserve useful source URLs in the final response.",
+          "maxResults": 5,
+          "searchContextSize": "low",
+          "allowedDomains": "",
+          "blockedDomains": "",
+          "customEndpoint": "https://api.example.com/search?q={{query}}&limit={{limit}}"
+        }
+      }
+    },
+    {
+      "id": "e30a21ec-f0d1-4ff2-893a-047b4c97a0e2",
+      "type": "synapseNode",
+      "position": {
+        "x": -4.574183438313998,
+        "y": 251.05136756246984
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Trigger",
+        "description": "Starts a flow manually or restarts it when an incoming event activates it.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "payload": "Is today a good day to make a trip into Portland Oregon?  ",
+          "continueState": false
+        }
+      }
+    },
+    {
+      "id": "faff0092-597e-4121-955a-f07c2befa554",
+      "type": "synapseNode",
+      "position": {
+        "x": 289.61631894227224,
+        "y": 241.40577732048342
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Luna Check Weather",
+        "description": "Uses an LLM to reason over its event and allowed context.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "Do an online search for Portland Oregon's current weather conditions. ",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700,
+          "requireToolCall": false,
+          "outputMode": "text"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "1aa52383-802f-44b0-99d8-82b8e725597b",
+      "source": "d8a01cca-ee20-440a-a887-31e6d7ed2b89",
+      "target": "7ac11b70-2bed-439e-883b-f86e48657639",
+      "targetHandle": "input",
+      "channel": "write"
+    },
+    {
+      "id": "1fc71aed-a433-4df2-a91b-daa87856be75",
+      "source": "5495207b-e4d8-40f2-96d2-66ae234aed6a",
+      "target": "d8a01cca-ee20-440a-a887-31e6d7ed2b89",
+      "targetHandle": "input",
+      "channel": "tool"
+    },
+    {
+      "id": "21613787-8445-429a-99ac-db465789bdcb",
+      "source": "76036165-38f8-41a3-abda-1dda530575b8",
+      "target": "5495207b-e4d8-40f2-96d2-66ae234aed6a",
+      "targetHandle": "input",
+      "channel": "data"
+    },
+    {
+      "id": "25680022-1abe-45b8-b90e-46c1fded679d",
+      "source": "7ac11b70-2bed-439e-883b-f86e48657639",
+      "target": "5dffe654-bf2e-4ac1-9201-0b5e75213487",
+      "targetHandle": "input",
+      "channel": "read"
+    },
+    {
+      "id": "59b696c1-e8e2-44e4-a717-4ca78fd7b7a2",
+      "source": "5495207b-e4d8-40f2-96d2-66ae234aed6a",
+      "target": "7ac11b70-2bed-439e-883b-f86e48657639",
+      "targetHandle": "input",
+      "channel": "write"
+    },
+    {
+      "id": "63d067c0-c153-4ae4-bf56-7304d6c56b94",
+      "source": "faff0092-597e-4121-955a-f07c2befa554",
+      "target": "d8a01cca-ee20-440a-a887-31e6d7ed2b89",
+      "targetHandle": "input",
+      "channel": "tool"
+    },
+    {
+      "id": "68534b9c-a34b-49f8-beac-34ffc052c201",
+      "source": "e30a21ec-f0d1-4ff2-893a-047b4c97a0e2",
+      "target": "faff0092-597e-4121-955a-f07c2befa554",
+      "targetHandle": "input",
+      "channel": "trigger"
+    },
+    {
+      "id": "9068b3bb-b235-4662-86ca-94620c6541ec",
+      "source": "76036165-38f8-41a3-abda-1dda530575b8",
+      "target": "7ac11b70-2bed-439e-883b-f86e48657639",
+      "targetHandle": "input",
+      "channel": "write"
+    },
+    {
+      "id": "a0d6c4c5-8543-4dfc-801c-574d7ed587ff",
+      "source": "faff0092-597e-4121-955a-f07c2befa554",
+      "target": "76036165-38f8-41a3-abda-1dda530575b8",
+      "targetHandle": "input",
+      "channel": "data"
+    },
+    {
+      "id": "a24d0c36-4479-4a54-b3e0-555c79865122",
+      "source": "faff0092-597e-4121-955a-f07c2befa554",
+      "target": "7ac11b70-2bed-439e-883b-f86e48657639",
+      "targetHandle": "input",
+      "channel": "write"
+    },
+    {
+      "id": "c2f6027e-73f4-4deb-831d-a7396fdb7c90",
+      "source": "5dffe654-bf2e-4ac1-9201-0b5e75213487",
+      "target": "d3276823-f511-4c4d-a034-c411fb8e498f",
+      "targetHandle": "input",
+      "channel": "data"
+    },
+    {
+      "id": "ee2a7eac-20c3-467b-b256-ff13031da937",
+      "source": "76036165-38f8-41a3-abda-1dda530575b8",
+      "target": "d8a01cca-ee20-440a-a887-31e6d7ed2b89",
+      "targetHandle": "input",
+      "channel": "tool"
+    },
+    {
+      "id": "f771280a-4456-4aed-bac3-0de435434d5f",
+      "source": "5495207b-e4d8-40f2-96d2-66ae234aed6a",
+      "target": "5dffe654-bf2e-4ac1-9201-0b5e75213487",
+      "targetHandle": "input",
+      "channel": "data"
+    }
+  ]
+}

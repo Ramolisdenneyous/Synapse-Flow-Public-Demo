@@ -1,0 +1,796 @@
+{
+  "format": "synapse-flow/harness",
+  "version": 2,
+  "name": "Story Engine v2 - GM Between Every Tool-Using Agent",
+  "nodes": [
+    {
+      "id": "gm-story-start",
+      "type": "synapseNode",
+      "position": {
+        "x": 50,
+        "y": 340
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Begin GM Chapter",
+        "description": "Presents the locked opening situation to the human GM.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "payload": {
+            "type": "begin_gm_chapter",
+            "openingSituation": "The Broken Watchtower begins above Moosehearth during a violent winter storm. Jannet, Annie, Beau, and Joe must light the warning beacon while frost raiders climb the tower. Write END CHAPTER whenever the scene should conclude."
+          },
+          "continueState": false
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    },
+    {
+      "id": "gm-story-user",
+      "type": "synapseNode",
+      "position": {
+        "x": 340,
+        "y": 340
+      },
+      "data": {
+        "kind": "user",
+        "label": "Human Game Master",
+        "description": "Pauses before every actor turn so the GM can dictate action flow, adjudicate fiction, or end the chapter.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "mode": "manual",
+          "systemPrompt": "You are the Game Master for a tense but fair fantasy adventure. The incoming turn brief names exactly one next actor. Respond in natural prose with the next situation, ruling, or direction for that named actor only; never redirect the turn to a different actor. Preserve established canon and give the named actor something concrete to respond to. Write END CHAPTER when the scene has reached a satisfying boundary. Never output JSON or code.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "gm-story-governor",
+      "type": "synapseNode",
+      "position": {
+        "x": 660,
+        "y": 340
+      },
+      "data": {
+        "kind": "governor",
+        "label": "GM Turn Governor",
+        "description": "Bounds the open GM and actor loop while allowing an explicit chapter ending.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "maxActivations": 30,
+          "stopPhrase": "ABORT CHAPTER"
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    },
+    {
+      "id": "gm-story-turn-router",
+      "type": "synapseNode",
+      "position": {
+        "x": 930,
+        "y": 340
+      },
+      "data": {
+        "kind": "logic",
+        "label": "Turn Sequencer",
+        "description": "Announces the fixed next actor before every GM prompt, routes the GM direction to that actor, and hands END CHAPTER to final narration.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "operation": "generated",
+          "routerPrompt": "Maintain strict round-robin order Jannet, Annie, Beau, Joe, Opposition through alternating awaiting_gm and awaiting_actor phases. On the initial Trigger, send Human Game Master a gm_turn_brief naming Jannet before accepting any GM prose. After every actor narration, advance the index and send Human Game Master a new gm_turn_brief naming the next actor. While awaiting_gm, route the GM prose only to the actor already named in that brief. If GM prose contains END CHAPTER case-insensitively, route only to Final Narrator and permanently stop actor routing. Stable target IDs are gm-story-user, gm-story-jannet, gm-story-annie, gm-story-beau, gm-story-joe, gm-story-opposition, and gm-story-final-narrator.",
+          "generatedCode": "function route(input, context, state) {\n  const actors = [\n    { id: \"gm-story-jannet\", name: \"Jannet\" },\n    { id: \"gm-story-annie\", name: \"Annie\" },\n    { id: \"gm-story-beau\", name: \"Beau\" },\n    { id: \"gm-story-joe\", name: \"Joe\" },\n    { id: \"gm-story-opposition\", name: \"Opposition\" }\n  ];\n  const s = state && typeof state === \"object\" && !Array.isArray(state)\n    ? JSON.parse(JSON.stringify(state))\n    : {};\n  if (s.ended) return { targetIds: [], drop: true, state: s };\n  const text = typeof input === \"string\" ? input.trim() : JSON.stringify(input);\n  const actorIndex = Number.isInteger(s.nextActorIndex) ? s.nextActorIndex : 0;\n  const actor = actors[actorIndex % actors.length];\n  if (!s.initialized) {\n    s.initialized = true;\n    s.phase = \"awaiting_gm\";\n    s.nextActorIndex = 0;\n    s.turnNumber = 0;\n    return {\n      targetIds: [\"gm-story-user\"],\n      payload: {\n        type: \"gm_turn_brief\",\n        nextActor: actors[0].name,\n        upcomingTurn: 1,\n        openingSituation: input && typeof input === \"object\"\n          ? input.openingSituation || input\n          : input,\n        instruction: \"Direct only the named next actor. Do not select a different actor.\"\n      },\n      state: s\n    };\n  }\n  if (s.phase === \"awaiting_gm\") {\n    if (/\\bend chapter\\b/i.test(text)) {\n      s.ended = true;\n      s.phase = \"ended\";\n      return {\n        targetIds: [\"gm-story-final-narrator\"],\n        payload: \"The GM ended the chapter. Build the final narrative from Canon Ledger. Final GM direction: \" + text,\n        state: s\n      };\n    }\n    s.phase = \"awaiting_actor\";\n    s.turnNumber += 1;\n    return {\n      targetIds: [actor.id],\n      payload: {\n        type: \"gm_directed_turn\",\n        actor: actor.name,\n        turnNumber: s.turnNumber,\n        gmDirection: text,\n        instruction: \"Take one in-character action through the connected mechanics Tool, then narrate only the resulting story beat.\"\n      },\n      state: s\n    };\n  }\n  if (s.phase === \"awaiting_actor\") {\n    const completedActor = actor.name;\n    s.nextActorIndex = (actorIndex + 1) % actors.length;\n    s.phase = \"awaiting_gm\";\n    const nextActor = actors[s.nextActorIndex];\n    return {\n      targetIds: [\"gm-story-user\"],\n      payload: {\n        type: \"gm_turn_brief\",\n        completedActor,\n        previousActorNarration: text,\n        nextActor: nextActor.name,\n        upcomingTurn: s.turnNumber + 1,\n        instruction: \"Respond to the completed beat, then direct only the named next actor. Do not select a different actor.\"\n      },\n      state: s\n    };\n  }\n  return { targetIds: [], drop: true, state: s };\n}",
+          "generatedSummary": "Round-robin sequencer that briefs the GM before every actor turn and provides an explicit final-narration branch.",
+          "generatedAt": "2026-08-01T04:38:14.967Z",
+          "generatedJobId": "hand-authored-gm-tool-story-engine",
+          "generatedAssumptions": [
+            "The GM controls scene direction in prose and does not need a machine-readable action contract.",
+            "Each actor must complete one native Tool call before returning narrative prose.",
+            "The shared Tool simulates the real application mechanics boundary; production reconstruction replaces it with the real game service."
+          ],
+          "generatedTests": [
+            {
+              "name": "opening announces Jannet to GM",
+              "input": "BEGIN_CHAPTER",
+              "expectedTargetIds": [
+                "gm-story-user"
+              ]
+            }
+          ],
+          "generatedVersions": [],
+          "rules": "",
+          "template": "{{input}}"
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    },
+    {
+      "id": "gm-story-jannet",
+      "type": "synapseNode",
+      "position": {
+        "x": 1250,
+        "y": 20
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Jannet - Character",
+        "description": "Takes one GM-directed character turn through the mechanics Tool and returns narrative prose.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Jannet, the Leader: organized, decisive, practical, and protective of the group.\n\nThe human user is the Game Master. Treat the incoming GM direction and Canon Ledger as authoritative. You may propose only your own actor's action; do not dictate another character's choice or invent a mechanical result.\n\nFor every turn, call the connected resolve_story_action Tool exactly once using actor \"Jannet\", a concrete action, a target, and your intent. Treat the Tool result as authoritative. After the Tool returns, write one concise narrative paragraph showing what your actor attempted and what actually happened. Stay in third-person past tense. Do not mention tools, prompts, schemas, dice APIs, or hidden mechanics. Do not output JSON, labels, bullet points, or Markdown code fences.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700,
+          "requireToolCall": true
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "gm-story-annie",
+      "type": "synapseNode",
+      "position": {
+        "x": 1250,
+        "y": 180
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Annie - Character",
+        "description": "Takes one GM-directed character turn through the mechanics Tool and returns narrative prose.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Annie, the Hero: theatrical, brave, hopeful, and drawn toward bold acts that lift morale.\n\nThe human user is the Game Master. Treat the incoming GM direction and Canon Ledger as authoritative. You may propose only your own actor's action; do not dictate another character's choice or invent a mechanical result.\n\nFor every turn, call the connected resolve_story_action Tool exactly once using actor \"Annie\", a concrete action, a target, and your intent. Treat the Tool result as authoritative. After the Tool returns, write one concise narrative paragraph showing what your actor attempted and what actually happened. Stay in third-person past tense. Do not mention tools, prompts, schemas, dice APIs, or hidden mechanics. Do not output JSON, labels, bullet points, or Markdown code fences.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700,
+          "requireToolCall": true
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "gm-story-beau",
+      "type": "synapseNode",
+      "position": {
+        "x": 1250,
+        "y": 340
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Beau - Character",
+        "description": "Takes one GM-directed character turn through the mechanics Tool and returns narrative prose.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Beau, the Rebel: skeptical, observant, unconventional, and alert to hidden angles.\n\nThe human user is the Game Master. Treat the incoming GM direction and Canon Ledger as authoritative. You may propose only your own actor's action; do not dictate another character's choice or invent a mechanical result.\n\nFor every turn, call the connected resolve_story_action Tool exactly once using actor \"Beau\", a concrete action, a target, and your intent. Treat the Tool result as authoritative. After the Tool returns, write one concise narrative paragraph showing what your actor attempted and what actually happened. Stay in third-person past tense. Do not mention tools, prompts, schemas, dice APIs, or hidden mechanics. Do not output JSON, labels, bullet points, or Markdown code fences.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700,
+          "requireToolCall": true
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "gm-story-joe",
+      "type": "synapseNode",
+      "position": {
+        "x": 1250,
+        "y": 500
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Joe - Character",
+        "description": "Takes one GM-directed character turn through the mechanics Tool and returns narrative prose.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Joe, the Protector: patient, compassionate, durable, and inclined to shield or restore others.\n\nThe human user is the Game Master. Treat the incoming GM direction and Canon Ledger as authoritative. You may propose only your own actor's action; do not dictate another character's choice or invent a mechanical result.\n\nFor every turn, call the connected resolve_story_action Tool exactly once using actor \"Joe\", a concrete action, a target, and your intent. Treat the Tool result as authoritative. After the Tool returns, write one concise narrative paragraph showing what your actor attempted and what actually happened. Stay in third-person past tense. Do not mention tools, prompts, schemas, dice APIs, or hidden mechanics. Do not output JSON, labels, bullet points, or Markdown code fences.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700,
+          "requireToolCall": true
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "gm-story-opposition",
+      "type": "synapseNode",
+      "position": {
+        "x": 1250,
+        "y": 660
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Opposition Agent",
+        "description": "Takes one GM-directed opposition turn through the mechanics Tool and returns narrative prose.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You portray the active opposition and environment: purposeful, dangerous, and fair. You challenge the party without deciding the heroes actions.\n\nThe human user is the Game Master. Treat the incoming GM direction and Canon Ledger as authoritative. You may propose only your own actor's action; do not dictate another character's choice or invent a mechanical result.\n\nFor every turn, call the connected resolve_story_action Tool exactly once using actor \"Opposition\", a concrete action, a target, and your intent. Treat the Tool result as authoritative. After the Tool returns, write one concise narrative paragraph showing what your actor attempted and what actually happened. Stay in third-person past tense. Do not mention tools, prompts, schemas, dice APIs, or hidden mechanics. Do not output JSON, labels, bullet points, or Markdown code fences.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700,
+          "requireToolCall": true
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "gm-story-action-tool",
+      "type": "synapseNode",
+      "position": {
+        "x": 1620,
+        "y": 340
+      },
+      "data": {
+        "kind": "tool",
+        "label": "Authoritative Story Action",
+        "description": "Simulates the real game-engine capability that resolves one actor action before narration.",
+        "inputType": "tool_request",
+        "outputType": "tool_result",
+        "config": {
+          "mode": "llm",
+          "mockResponse": "The attempted action resolves without changing the situation.",
+          "behaviorPrompt": "You are the authoritative mechanics service for a fantasy Story Engine prototype. You receive one strict function-call object with actor, action, target, and intent, plus explicitly connected Canon Ledger context. Resolve only that action. Preserve established facts, do not choose another actor action, and do not narrate a full scene. Return one compact JSON object with keys success (boolean), outcome (string), consequence (string), and canonUpdate (string). The calling character Agent will convert this private mechanical result into narrative prose.",
+          "functionName": "resolve_story_action",
+          "functionDescription": "Resolve one proposed story action against established canon. Call this exactly once before narrating an actor turn; its outcome is authoritative.",
+          "parametersSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"actor\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"Jannet\",\n        \"Annie\",\n        \"Beau\",\n        \"Joe\",\n        \"Opposition\"\n      ]\n    },\n    \"action\": {\n      \"type\": \"string\",\n      \"description\": \"The concrete action attempted in the fiction.\"\n    },\n    \"target\": {\n      \"type\": \"string\",\n      \"description\": \"The person, creature, object, place, or situation affected.\"\n    },\n    \"intent\": {\n      \"type\": \"string\",\n      \"description\": \"What the actor hopes the action will accomplish.\"\n    }\n  },\n  \"required\": [\n    \"actor\",\n    \"action\",\n    \"target\",\n    \"intent\"\n  ],\n  \"additionalProperties\": false\n}"
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    },
+    {
+      "id": "gm-story-canon",
+      "type": "synapseNode",
+      "position": {
+        "x": 710,
+        "y": 840
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Canon Ledger",
+        "description": "Stores each GM direction and each resulting actor narration in chronological order.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": "Chapter: The Broken Watchtower. Setting: a stormbound mountain signal tower above Moosehearth. Party: Jannet the Leader, Annie the Hero, Beau the Rebel, and Joe the Protector. Threat: frost raiders are climbing the tower. Objective: light the warning beacon. The GM owns canon and flow; the mechanics Tool owns action outcomes."
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    },
+    {
+      "id": "gm-story-final-narrator",
+      "type": "synapseNode",
+      "position": {
+        "x": 1250,
+        "y": 860
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Final Narrator",
+        "description": "Builds the completed chapter from the chronological Canon Ledger after the GM ends play.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "Write a polished third-person past-tense fantasy chapter from the complete Canon Ledger. Preserve chronology, GM rulings, character actions, Tool-resolved consequences, and the ending. Do not add new mechanical outcomes or continue beyond the GM ending. Return narrative prose only, with no JSON, headings, or commentary.",
+          "reasoningEffort": "medium",
+          "maxOutputTokens": 2200,
+          "requireToolCall": false
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "gm-story-archive",
+      "type": "synapseNode",
+      "position": {
+        "x": 1620,
+        "y": 820
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Chapter Archive",
+        "description": "Stores the final reconstructed chapter.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    },
+    {
+      "id": "gm-story-output",
+      "type": "synapseNode",
+      "position": {
+        "x": 1620,
+        "y": 980
+      },
+      "data": {
+        "kind": "output",
+        "label": "Completed GM Chapter",
+        "description": "Displays the final chapter after the GM ends the simulation.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {},
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "gm-story-edge-start-router",
+      "source": "gm-story-start",
+      "target": "gm-story-turn-router",
+      "type": "smoothstep",
+      "label": "trigger",
+      "data": {
+        "channel": "trigger"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-user-canon",
+      "source": "gm-story-user",
+      "target": "gm-story-canon",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-user-governor",
+      "source": "gm-story-user",
+      "target": "gm-story-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-governor-router",
+      "source": "gm-story-governor",
+      "target": "gm-story-turn-router",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-router-user",
+      "source": "gm-story-turn-router",
+      "target": "gm-story-user",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-router-gm-story-jannet",
+      "source": "gm-story-turn-router",
+      "target": "gm-story-jannet",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-router-gm-story-annie",
+      "source": "gm-story-turn-router",
+      "target": "gm-story-annie",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-router-gm-story-beau",
+      "source": "gm-story-turn-router",
+      "target": "gm-story-beau",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-router-gm-story-joe",
+      "source": "gm-story-turn-router",
+      "target": "gm-story-joe",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-router-gm-story-opposition",
+      "source": "gm-story-turn-router",
+      "target": "gm-story-opposition",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-router-final",
+      "source": "gm-story-turn-router",
+      "target": "gm-story-final-narrator",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-jannet-canon",
+      "source": "gm-story-jannet",
+      "target": "gm-story-canon",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-jannet-router",
+      "source": "gm-story-jannet",
+      "target": "gm-story-turn-router",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-jannet-tool",
+      "source": "gm-story-jannet",
+      "target": "gm-story-action-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-canon-gm-story-jannet",
+      "source": "gm-story-canon",
+      "target": "gm-story-jannet",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-annie-canon",
+      "source": "gm-story-annie",
+      "target": "gm-story-canon",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-annie-router",
+      "source": "gm-story-annie",
+      "target": "gm-story-turn-router",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-annie-tool",
+      "source": "gm-story-annie",
+      "target": "gm-story-action-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-canon-gm-story-annie",
+      "source": "gm-story-canon",
+      "target": "gm-story-annie",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-beau-canon",
+      "source": "gm-story-beau",
+      "target": "gm-story-canon",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-beau-router",
+      "source": "gm-story-beau",
+      "target": "gm-story-turn-router",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-beau-tool",
+      "source": "gm-story-beau",
+      "target": "gm-story-action-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-canon-gm-story-beau",
+      "source": "gm-story-canon",
+      "target": "gm-story-beau",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-joe-canon",
+      "source": "gm-story-joe",
+      "target": "gm-story-canon",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-joe-router",
+      "source": "gm-story-joe",
+      "target": "gm-story-turn-router",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-joe-tool",
+      "source": "gm-story-joe",
+      "target": "gm-story-action-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-canon-gm-story-joe",
+      "source": "gm-story-canon",
+      "target": "gm-story-joe",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-opposition-canon",
+      "source": "gm-story-opposition",
+      "target": "gm-story-canon",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-opposition-router",
+      "source": "gm-story-opposition",
+      "target": "gm-story-turn-router",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-gm-story-opposition-tool",
+      "source": "gm-story-opposition",
+      "target": "gm-story-action-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-canon-gm-story-opposition",
+      "source": "gm-story-canon",
+      "target": "gm-story-opposition",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-canon-user",
+      "source": "gm-story-canon",
+      "target": "gm-story-user",
+      "targetHandle": "read",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-canon-tool",
+      "source": "gm-story-canon",
+      "target": "gm-story-action-tool",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-canon-final",
+      "source": "gm-story-canon",
+      "target": "gm-story-final-narrator",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-final-archive",
+      "source": "gm-story-final-narrator",
+      "target": "gm-story-archive",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "gm-story-edge-final-output",
+      "source": "gm-story-final-narrator",
+      "target": "gm-story-output",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    }
+  ]
+}

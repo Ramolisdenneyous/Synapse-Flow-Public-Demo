@@ -1,0 +1,683 @@
+{
+  "version": 1,
+  "name": "Four Agent Counting Blackjack",
+  "nodes": [
+    {
+      "id": "four-agent-blackjack-next-round-trigger",
+      "type": "synapseNode",
+      "position": {
+        "x": 40,
+        "y": 370
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Deal Next Round",
+        "description": "Starts a fresh table or continues with the remaining deck after a completed round.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "payload": "DEAL_ROUND",
+          "continueState": true
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-table-engine",
+      "type": "synapseNode",
+      "position": {
+        "x": 340,
+        "y": 370
+      },
+      "data": {
+        "kind": "logic",
+        "label": "Table Engine",
+        "description": "Owns cards and rules while routing every Dealer and player decision through Luna Agents.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "operation": "generated",
+          "routerPrompt": "Run a single-deck blackjack table with four Luna\nparticipants: one Dealer Agent and three player Agents. Give every participant\nan isolated private Memory with a read edge back to that Agent.\n\nThe Table Engine owns only authoritative mechanics: the remaining deck, dealing,\nhand totals, action tokens, validation, round number, and final comparisons.\nThe Dealer must be a connected Luna Agent. The Table Engine must send the\nDealer's revealed hand to that Agent and wait for strict JSON hit-or-stand\nresponses instead of choosing Dealer actions internally.\n\nBefore activating an Agent, publish the latest complete public table observation\nto that Agent's private Memory. Synchronize all four Memories with the completed\nround. Each observation must include the cumulative cards revealed in the\ncurrent shoe, Hi-Lo running and true counts, penetration, rank frequencies,\npublic hands, and cards remaining. Never expose the Dealer hole card until\nDealer play begins. Retain these Memories and Router state when Deal Next Round\nmanually continues the same graph.\n\nThis prototype uses hit and stand only. It does not model betting, splits,\ndoubles, surrender, or insurance. Players may choose hit or stand. The Dealer\nAgent must hit below 17 and stand on hard or soft 17 or above. Reject invalid or\nstale participant decisions and retry the same Agent without advancing.\n\nOn DEAL_ROUND, reuse the remaining private deck. Shuffle a new 52-card deck only\nwhen no prior deck exists or fewer than 20 cards remain. After all players\nfinish, route to the Dealer Agent until it stands or busts. Send the completed\nround only to Round Ledger and Table Display, with no continuation target.\n\nUse context.runtime.randomValue to shuffle. Preserve the remaining deck and\nround number in private Router state for continuation Trigger sessions.",
+          "generatedCode": "function route(input, context, state) {\n  const players = [\n    { name: \"Player One\", id: \"four-agent-blackjack-player-one\" },\n    { name: \"Player Two\", id: \"four-agent-blackjack-player-two\" },\n    { name: \"Player Three\", id: \"four-agent-blackjack-player-three\" }\n  ];\n  const dealerId = \"four-agent-blackjack-dealer-agent\";\n  const ledgerId = \"four-agent-blackjack-round-ledger\";\n  const outputId = \"four-agent-blackjack-table-display\";\n  const memoryIds = [\n    \"four-agent-blackjack-dealer-memory\",\n    \"four-agent-blackjack-player-one-memory\",\n    \"four-agent-blackjack-player-two-memory\",\n    \"four-agent-blackjack-player-three-memory\"\n  ];\n  const memoryByAgentId = {\n    \"four-agent-blackjack-dealer-agent\": memoryIds[0],\n    \"four-agent-blackjack-player-one\": memoryIds[1],\n    \"four-agent-blackjack-player-two\": memoryIds[2],\n    \"four-agent-blackjack-player-three\": memoryIds[3]\n  };\n\n  function observedTargets(...targetIds) {\n    return [...memoryIds, ...targetIds];\n  }\n\n  function decisionTargets(agentId) {\n    return [memoryByAgentId[agentId], agentId, outputId];\n  }\n\n  function shuffledDeck(randomValue) {\n    const suits = [\"S\", \"H\", \"D\", \"C\"];\n    const ranks = [\"A\", \"2\", \"3\", \"4\", \"5\", \"6\", \"7\", \"8\", \"9\", \"10\", \"J\", \"Q\", \"K\"];\n    const deck = [];\n    for (const suit of suits) {\n      for (const rank of ranks) deck.push(rank + suit);\n    }\n    let seed = Math.floor(randomValue * 4294967296) >>> 0;\n    function nextRandom() {\n      seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;\n      return seed / 4294967296;\n    }\n    for (let index = deck.length - 1; index > 0; index -= 1) {\n      const choice = Math.floor(nextRandom() * (index + 1));\n      const held = deck[index];\n      deck[index] = deck[choice];\n      deck[choice] = held;\n    }\n    return deck;\n  }\n\n  function rank(card) {\n    return String(card).slice(0, -1);\n  }\n\n  function handValue(hand) {\n    let total = 0;\n    let aces = 0;\n    for (const card of hand) {\n      const value = rank(card);\n      if (value === \"A\") {\n        total += 11;\n        aces += 1;\n      } else if ([\"K\", \"Q\", \"J\"].includes(value)) {\n        total += 10;\n      } else {\n        total += Number(value);\n      }\n    }\n    while (total > 21 && aces > 0) {\n      total -= 10;\n      aces -= 1;\n    }\n    return { total, soft: aces > 0 };\n  }\n\n  function hiLoValue(card) {\n    const value = rank(card);\n    if ([\"2\", \"3\", \"4\", \"5\", \"6\"].includes(value)) return 1;\n    if ([\"10\", \"J\", \"Q\", \"K\", \"A\"].includes(value)) return -1;\n    return 0;\n  }\n\n  function countingSnapshot(roundState) {\n    const revealedCards = Array.isArray(roundState.revealedCards)\n      ? roundState.revealedCards\n      : [];\n    const runningCount = revealedCards.reduce(\n      (total, card) => total + hiLoValue(card),\n      0\n    );\n    const decksRemaining = Math.max(roundState.deck.length / 52, 0.25);\n    const rankFrequencies = {};\n    for (const card of revealedCards) {\n      const value = rank(card);\n      rankFrequencies[value] = (rankFrequencies[value] || 0) + 1;\n    }\n    const unseenByRank = Object.fromEntries(\n      [\"A\", \"2\", \"3\", \"4\", \"5\", \"6\", \"7\", \"8\", \"9\", \"10\", \"J\", \"Q\", \"K\"].map(\n        (value) => [value, 4 - (rankFrequencies[value] || 0)]\n      )\n    );\n    return {\n      system: \"Hi-Lo\",\n      shoe: roundState.shoe,\n      revealedCards,\n      seenCards: revealedCards.length,\n      unseenCards: 52 - revealedCards.length,\n      cardsDealt: 52 - roundState.deck.length,\n      cardsRemaining: roundState.deck.length,\n      runningCount,\n      decksRemaining: Number(decksRemaining.toFixed(2)),\n      trueCount: Number((runningCount / decksRemaining).toFixed(2)),\n      penetration: Number(((52 - roundState.deck.length) / 52).toFixed(3)),\n      rankFrequencies,\n      unseenByRank\n    };\n  }\n\n  function publicTable(roundState) {\n    return {\n      hands: Object.fromEntries(\n        players.map((player) => [player.name, roundState.hands[player.name]])\n      ),\n      totals: Object.fromEntries(\n        players.map((player) => [\n          player.name,\n          handValue(roundState.hands[player.name]).total\n        ])\n      ),\n      statuses: roundState.statuses,\n      dealerUpCard: roundState.hands.Dealer[0],\n      dealerHiddenCards: roundState.dealerRevealed\n        ? 0\n        : Math.max(0, roundState.hands.Dealer.length - 1),\n      dealerHand: roundState.dealerRevealed\n        ? roundState.hands.Dealer\n        : [roundState.hands.Dealer[0]]\n    };\n  }\n\n  function parseDecision(value) {\n    if (value && typeof value === \"object\" && !Array.isArray(value)) return value;\n    const text = String(value || \"\").trim();\n    const start = text.indexOf(\"{\");\n    const end = text.lastIndexOf(\"}\");\n    if (start < 0 || end < start) return null;\n    try {\n      return JSON.parse(text.slice(start, end + 1));\n    } catch {\n      return null;\n    }\n  }\n\n  function nextToken(roundState, actor) {\n    return (\n      \"round-\" +\n      roundState.round +\n      \"-action-\" +\n      roundState.actionNumber +\n      \"-\" +\n      actor.replaceAll(\" \", \"-\").toLowerCase() +\n      \"-\" +\n      context.runtime.invocationId.slice(0, 8)\n    );\n  }\n\n  function publicPlayerTurn(roundState, event, type) {\n    const player = players[roundState.playerIndex];\n    const value = handValue(roundState.hands[player.name]);\n    return {\n      type: type || \"player_turn\",\n      round: roundState.round,\n      shoe: roundState.shoe,\n      player: player.name,\n      hand: roundState.hands[player.name],\n      total: value.total,\n      soft: value.soft,\n      dealerUpCard: roundState.hands.Dealer[0],\n      dealerHiddenCards: Math.max(0, roundState.hands.Dealer.length - 1),\n      legalActions: [\"hit\", \"stand\"],\n      actionToken: roundState.actionToken,\n      cardsRemaining: roundState.deck.length,\n      publicTable: publicTable(roundState),\n      counting: countingSnapshot(roundState),\n      lastEvent: event,\n      instruction: \"Return one strict JSON hit-or-stand decision.\"\n    };\n  }\n\n  function publicDealerTurn(roundState, event, type) {\n    const value = handValue(roundState.hands.Dealer);\n    const legalActions = value.total < 17 ? [\"hit\"] : [\"stand\"];\n    return {\n      type: type || \"dealer_turn\",\n      round: roundState.round,\n      shoe: roundState.shoe,\n      dealer: \"Dealer\",\n      hand: roundState.hands.Dealer,\n      total: value.total,\n      soft: value.soft,\n      legalActions,\n      actionToken: roundState.actionToken,\n      cardsRemaining: roundState.deck.length,\n      playerTotals: Object.fromEntries(\n        players.map((player) => [\n          player.name,\n          handValue(roundState.hands[player.name]).total\n        ])\n      ),\n      publicTable: publicTable(roundState),\n      counting: countingSnapshot(roundState),\n      lastEvent: event,\n      instruction: \"Return the one legal Dealer action as strict JSON.\"\n    };\n  }\n\n  function resultFor(playerName, roundState, dealerValue) {\n    const hand = roundState.hands[playerName];\n    const playerValue = handValue(hand).total;\n    const playerBlackjack = hand.length === 2 && playerValue === 21;\n    const dealerBlackjack = roundState.hands.Dealer.length === 2 && dealerValue === 21;\n    if (playerValue > 21) return \"loss\";\n    if (playerBlackjack && dealerBlackjack) return \"push\";\n    if (playerBlackjack) return \"blackjack\";\n    if (dealerBlackjack) return \"loss\";\n    if (dealerValue > 21) return \"win\";\n    if (playerValue > dealerValue) return \"win\";\n    if (playerValue < dealerValue) return \"loss\";\n    return \"push\";\n  }\n\n  function completeRound(roundState, event) {\n    const dealerValue = handValue(roundState.hands.Dealer);\n    const statuses = {\n      ...roundState.statuses,\n      Dealer: dealerValue.total > 21 ? \"bust\" : \"stand\"\n    };\n    const completed = {\n      ...roundState,\n      phase: \"round_complete\",\n      statuses\n    };\n    const results = Object.fromEntries(\n      players.map((player) => [\n        player.name,\n        resultFor(player.name, completed, dealerValue.total)\n      ])\n    );\n    const totals = Object.fromEntries(\n      [\"Dealer\", ...players.map((player) => player.name)].map((name) => [\n        name,\n        handValue(completed.hands[name]).total\n      ])\n    );\n    const payload = {\n      type: \"round_complete\",\n      round: completed.round,\n      shoe: completed.shoe,\n      hands: completed.hands,\n      totals,\n      results,\n      dealerStatus: statuses.Dealer,\n      cardsRemaining: completed.deck.length,\n      publicTable: publicTable(completed),\n      counting: countingSnapshot(completed),\n      lastEvent: event,\n      message:\n        \"Round \" +\n        completed.round +\n        \" complete. Fire Deal Next Round to continue from the remaining \" +\n        completed.deck.length +\n        \" cards.\"\n    };\n    return {\n      targetIds: observedTargets(ledgerId, outputId),\n      payload,\n      state: { ...completed, results }\n    };\n  }\n\n  function activateDealer(roundState, event) {\n    const revealedState = roundState.dealerRevealed\n      ? roundState\n      : {\n          ...roundState,\n          dealerRevealed: true,\n          revealedCards: [\n            ...roundState.revealedCards,\n            ...roundState.hands.Dealer.slice(1)\n          ]\n        };\n    const revealEvent = roundState.dealerRevealed\n      ? event\n      : {\n          kind: \"dealer_reveal\",\n          cards: roundState.hands.Dealer.slice(1),\n          previousEvent: event,\n          message: \"The Dealer revealed the hidden card.\"\n        };\n    const dealerValue = handValue(revealedState.hands.Dealer);\n    if (dealerValue.total === 21 && revealedState.hands.Dealer.length === 2) {\n      return completeRound(revealedState, {\n        kind: \"dealer_blackjack\",\n        message: \"The Dealer revealed blackjack.\"\n      });\n    }\n    const nextState = {\n      ...revealedState,\n      phase: \"dealer\",\n      actionNumber: revealedState.actionNumber + 1,\n      statuses: { ...revealedState.statuses, Dealer: \"acting\" }\n    };\n    nextState.actionToken = nextToken(nextState, \"Dealer\");\n    return {\n      targetIds: decisionTargets(dealerId),\n      payload: publicDealerTurn(nextState, revealEvent),\n      state: nextState\n    };\n  }\n\n  function activateNextPlayer(roundState, afterIndex, event) {\n    for (let index = afterIndex + 1; index < players.length; index += 1) {\n      const player = players[index];\n      if (roundState.statuses[player.name] !== \"waiting\") continue;\n      const nextState = {\n        ...roundState,\n        playerIndex: index,\n        actionNumber: roundState.actionNumber + 1,\n        statuses: { ...roundState.statuses, [player.name]: \"acting\" }\n      };\n      nextState.actionToken = nextToken(nextState, player.name);\n      return {\n        targetIds: decisionTargets(player.id),\n        payload: publicPlayerTurn(nextState, event),\n        state: nextState\n      };\n    }\n    return activateDealer(roundState, event);\n  }\n\n  const startRequested =\n    String(input || \"\").trim().toUpperCase() === \"DEAL_ROUND\" ||\n    (input && typeof input === \"object\" && input.type === \"deal_round\");\n\n  if (startRequested) {\n    let deck = Array.isArray(state.deck) ? state.deck.slice() : [];\n    let shoe = Number(state.shoe) || 0;\n    let reshuffled = false;\n    if (deck.length < 20) {\n      deck = shuffledDeck(context.runtime.randomValue);\n      shoe += 1;\n      reshuffled = true;\n    }\n    const hands = {\n      Dealer: [],\n      \"Player One\": [],\n      \"Player Two\": [],\n      \"Player Three\": []\n    };\n    const dealOrder = [...players.map((player) => player.name), \"Dealer\"];\n    for (let pass = 0; pass < 2; pass += 1) {\n      for (const name of dealOrder) hands[name].push(deck.shift());\n    }\n    const priorRevealed =\n      !reshuffled && Array.isArray(state.revealedCards)\n        ? state.revealedCards\n        : [];\n    const statuses = { Dealer: \"hidden\" };\n    for (const player of players) {\n      statuses[player.name] =\n        handValue(hands[player.name]).total === 21 ? \"blackjack\" : \"waiting\";\n    }\n    const roundState = {\n      initialized: true,\n      phase: \"players\",\n      shoe,\n      round: (Number(state.round) || 0) + 1,\n      deck,\n      hands,\n      statuses,\n      playerIndex: -1,\n      actionNumber: 0,\n      actionToken: \"\",\n      reshuffled,\n      dealerRevealed: false,\n      revealedCards: [\n        ...priorRevealed,\n        hands[\"Player One\"][0],\n        hands[\"Player Two\"][0],\n        hands[\"Player Three\"][0],\n        hands.Dealer[0],\n        hands[\"Player One\"][1],\n        hands[\"Player Two\"][1],\n        hands[\"Player Three\"][1]\n      ]\n    };\n    return activateNextPlayer(roundState, -1, {\n      kind: \"round_dealt\",\n      reshuffled,\n      message: reshuffled\n        ? \"A fresh deck was shuffled and the round was dealt.\"\n        : \"The round was dealt from the remaining deck.\"\n    });\n  }\n\n  if (!state.initialized) {\n    return { drop: true, payload: input, state };\n  }\n\n  if (state.phase === \"players\") {\n    const currentPlayer = players[state.playerIndex];\n    const decision = parseDecision(input);\n    const action = String(decision && decision.action || \"\").toLowerCase();\n    const valid =\n      decision &&\n      decision.player === currentPlayer.name &&\n      decision.actionToken === state.actionToken &&\n      [\"hit\", \"stand\"].includes(action);\n\n    if (!valid) {\n      return {\n        targetIds: decisionTargets(currentPlayer.id),\n        payload: publicPlayerTurn(\n          state,\n          {\n            kind: \"invalid_player_decision\",\n            message: \"Use the exact player, actionToken, and a legal action.\"\n          },\n          \"retry\"\n        ),\n        state\n      };\n    }\n\n    const deck = state.deck.slice();\n    const hands = { ...state.hands };\n    const statuses = { ...state.statuses };\n    let event;\n    if (action === \"hit\") {\n      if (deck.length === 0) {\n        return activateDealer(state, {\n          kind: \"deck_exhausted\",\n          message: \"No card remained for the requested player hit.\"\n        });\n      }\n      const card = deck.shift();\n      hands[currentPlayer.name] = [...hands[currentPlayer.name], card];\n      const value = handValue(hands[currentPlayer.name]).total;\n      event = {\n        kind: value > 21 ? \"player_bust\" : \"player_hit\",\n        player: currentPlayer.name,\n        card,\n        total: value,\n        message:\n          value > 21\n            ? currentPlayer.name + \" drew \" + card + \" and busted at \" + value + \".\"\n            : currentPlayer.name + \" drew \" + card + \" for \" + value + \".\"\n      };\n      if (value < 21) {\n      const nextState = {\n          ...state,\n          deck,\n          hands,\n          revealedCards: [...state.revealedCards, card],\n          actionNumber: state.actionNumber + 1\n        };\n        nextState.actionToken = nextToken(nextState, currentPlayer.name);\n        return {\n          targetIds: decisionTargets(currentPlayer.id),\n          payload: publicPlayerTurn(nextState, event),\n          state: nextState\n        };\n      }\n      state = {\n        ...state,\n        revealedCards: [...state.revealedCards, card]\n      };\n      statuses[currentPlayer.name] = value > 21 ? \"bust\" : \"stand\";\n    } else {\n      statuses[currentPlayer.name] = \"stand\";\n      event = {\n        kind: \"player_stand\",\n        player: currentPlayer.name,\n        total: handValue(hands[currentPlayer.name]).total,\n        message:\n          currentPlayer.name +\n          \" stood at \" +\n          handValue(hands[currentPlayer.name]).total +\n          \".\"\n      };\n    }\n    return activateNextPlayer(\n      { ...state, deck, hands, statuses },\n      state.playerIndex,\n      event\n    );\n  }\n\n  if (state.phase === \"dealer\") {\n    const decision = parseDecision(input);\n    const action = String(decision && decision.action || \"\").toLowerCase();\n    const dealerValue = handValue(state.hands.Dealer);\n    const legalActions = dealerValue.total < 17 ? [\"hit\"] : [\"stand\"];\n    const valid =\n      decision &&\n      decision.dealer === \"Dealer\" &&\n      decision.actionToken === state.actionToken &&\n      legalActions.includes(action);\n\n    if (!valid) {\n      return {\n        targetIds: decisionTargets(dealerId),\n        payload: publicDealerTurn(\n          state,\n          {\n            kind: \"invalid_dealer_decision\",\n            message: \"Use the exact Dealer identity, actionToken, and legal action.\"\n          },\n          \"dealer_retry\"\n        ),\n        state\n      };\n    }\n\n    if (action === \"stand\") {\n      return completeRound(state, {\n        kind: \"dealer_stand\",\n        total: dealerValue.total,\n        message: \"Dealer stood at \" + dealerValue.total + \".\"\n      });\n    }\n\n    if (state.deck.length === 0) {\n      return completeRound(state, {\n        kind: \"deck_exhausted\",\n        message: \"No card remained for the Dealer hit.\"\n      });\n    }\n    const deck = state.deck.slice();\n    const card = deck.shift();\n    const hands = {\n      ...state.hands,\n      Dealer: [...state.hands.Dealer, card]\n    };\n    const nextValue = handValue(hands.Dealer);\n    const event = {\n      kind: nextValue.total > 21 ? \"dealer_bust\" : \"dealer_hit\",\n      card,\n      total: nextValue.total,\n      message:\n        nextValue.total > 21\n          ? \"Dealer drew \" + card + \" and busted at \" + nextValue.total + \".\"\n          : \"Dealer drew \" + card + \" for \" + nextValue.total + \".\"\n    };\n    const nextState = {\n      ...state,\n      deck,\n      hands,\n      revealedCards: [...state.revealedCards, card]\n    };\n    if (nextValue.total > 21) return completeRound(nextState, event);\n    nextState.actionNumber = state.actionNumber + 1;\n    nextState.actionToken = nextToken(nextState, \"Dealer\");\n    return {\n      targetIds: decisionTargets(dealerId),\n      payload: publicDealerTurn(nextState, event),\n      state: nextState\n    };\n  }\n\n  return { drop: true, payload: input, state };\n}",
+          "generatedSummary": "Runs one blackjack round with four card-counting Agents and isolated private Memories.",
+          "generatedAt": "2026-07-30T00:00:00.000Z",
+          "generatedJobId": "counting-blackjack-bootstrap",
+          "rules": "",
+          "template": "{{input}}"
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-dealer-agent",
+      "type": "synapseNode",
+      "position": {
+        "x": 700,
+        "y": 30
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Dealer Agent",
+        "description": "Uses private shoe memory while controlling each required Dealer action.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are the Dealer at a blackjack table.\n\nYou receive an authoritative dealer_turn or dealer_retry payload from the Table\nEngine. It contains the Dealer hand, total, whether it is soft, legalActions,\nand actionToken.\n\nYour explicitly connected private memory contains the latest complete public\nobservation for the current shoe. Independently check its Hi-Lo running count:\n2 through 6 are +1, 7 through 9 are 0, and 10 through Ace are -1. Do not count\nthe same revealed card twice. A new shoe resets the count.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"dealer\":\"Dealer\",\"action\":\"hit\",\"actionToken\":\"TOKEN_FROM_INPUT\",\"countReport\":{\"shoe\":1,\"runningCount\":0,\"trueCount\":0,\"seenCards\":8}}\n\nChoose exactly the one action listed in legalActions. Copy actionToken exactly.\nReport your count from the newest public snapshot. Card counting does not let\nyou violate the Dealer's legal action.\nNever invent, deal, remove, or rename cards. The Table Engine controls the deck,\nvalidates your response, and scores the round.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 220
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-player-one",
+      "type": "synapseNode",
+      "position": {
+        "x": 700,
+        "y": 210
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Player One",
+        "description": "Uses private shoe memory and card counting to choose hit or stand.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Player One, one of three players at a blackjack table.\n\nYou receive an authoritative player_turn or retry payload from the Table Engine.\nChoose exactly one action from legalActions.\n\nYour explicitly connected private memory contains the latest complete public\nobservation for the current shoe. Independently check its Hi-Lo running count:\n2 through 6 are +1, 7 through 9 are 0, and 10 through Ace are -1. Do not count\nthe same revealed card twice. A new shoe resets the count.\n\nUse sensible blackjack play:\n- Stand on hard 17 or higher.\n- Hit hard 11 or lower.\n- On hard 12, stand against Dealer 4 through 6 and otherwise hit.\n- On hard 13 through 16, stand against Dealer 2 through 6 and otherwise hit.\n- On soft totals below 18, hit; on soft 19 or higher, stand.\n- On soft 18, stand against Dealer 2 through 8 and otherwise hit.\n- Use true-count deviations when relevant: stand on hard 16 versus Dealer 10 at\n  true count 0 or higher; stand on hard 15 versus Dealer 10 at +4 or higher;\n  stand on hard 12 versus Dealer 3 at +2 or higher, and versus Dealer 2 at +3\n  or higher.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"player\":\"Player One\",\"action\":\"hit\",\"actionToken\":\"TOKEN_FROM_INPUT\",\"countReport\":{\"shoe\":1,\"runningCount\":0,\"trueCount\":0,\"seenCards\":7}}\n\nThe action must be \"hit\" or \"stand\". Copy actionToken exactly. Never invent or\nalter cards. Report your count from the newest public snapshot. The Table Engine\nresolves all authoritative mechanics.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 240
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-player-two",
+      "type": "synapseNode",
+      "position": {
+        "x": 700,
+        "y": 390
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Player Two",
+        "description": "Uses private shoe memory and card counting to choose hit or stand.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Player Two, one of three players at a blackjack table.\n\nYou receive an authoritative player_turn or retry payload from the Table Engine.\nChoose exactly one action from legalActions.\n\nYour explicitly connected private memory contains the latest complete public\nobservation for the current shoe. Independently check its Hi-Lo running count:\n2 through 6 are +1, 7 through 9 are 0, and 10 through Ace are -1. Do not count\nthe same revealed card twice. A new shoe resets the count.\n\nUse sensible blackjack play:\n- Stand on hard 17 or higher.\n- Hit hard 11 or lower.\n- On hard 12, stand against Dealer 4 through 6 and otherwise hit.\n- On hard 13 through 16, stand against Dealer 2 through 6 and otherwise hit.\n- On soft totals below 18, hit; on soft 19 or higher, stand.\n- On soft 18, stand against Dealer 2 through 8 and otherwise hit.\n- Use true-count deviations when relevant: stand on hard 16 versus Dealer 10 at\n  true count 0 or higher; stand on hard 15 versus Dealer 10 at +4 or higher;\n  stand on hard 12 versus Dealer 3 at +2 or higher, and versus Dealer 2 at +3\n  or higher.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"player\":\"Player Two\",\"action\":\"hit\",\"actionToken\":\"TOKEN_FROM_INPUT\",\"countReport\":{\"shoe\":1,\"runningCount\":0,\"trueCount\":0,\"seenCards\":7}}\n\nThe action must be \"hit\" or \"stand\". Copy actionToken exactly. Never invent or\nalter cards. Report your count from the newest public snapshot. The Table Engine\nresolves all authoritative mechanics.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 240
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-player-three",
+      "type": "synapseNode",
+      "position": {
+        "x": 700,
+        "y": 570
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Player Three",
+        "description": "Uses private shoe memory and card counting to choose hit or stand.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Player Three, one of three players at a blackjack table.\n\nYou receive an authoritative player_turn or retry payload from the Table Engine.\nChoose exactly one action from legalActions.\n\nYour explicitly connected private memory contains the latest complete public\nobservation for the current shoe. Independently check its Hi-Lo running count:\n2 through 6 are +1, 7 through 9 are 0, and 10 through Ace are -1. Do not count\nthe same revealed card twice. A new shoe resets the count.\n\nUse sensible blackjack play:\n- Stand on hard 17 or higher.\n- Hit hard 11 or lower.\n- On hard 12, stand against Dealer 4 through 6 and otherwise hit.\n- On hard 13 through 16, stand against Dealer 2 through 6 and otherwise hit.\n- On soft totals below 18, hit; on soft 19 or higher, stand.\n- On soft 18, stand against Dealer 2 through 8 and otherwise hit.\n- Use true-count deviations when relevant: stand on hard 16 versus Dealer 10 at\n  true count 0 or higher; stand on hard 15 versus Dealer 10 at +4 or higher;\n  stand on hard 12 versus Dealer 3 at +2 or higher, and versus Dealer 2 at +3\n  or higher.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"player\":\"Player Three\",\"action\":\"hit\",\"actionToken\":\"TOKEN_FROM_INPUT\",\"countReport\":{\"shoe\":1,\"runningCount\":0,\"trueCount\":0,\"seenCards\":7}}\n\nThe action must be \"hit\" or \"stand\". Copy actionToken exactly. Never invent or\nalter cards. Report your count from the newest public snapshot. The Table Engine\nresolves all authoritative mechanics.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 240
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-dealer-memory",
+      "type": "synapseNode",
+      "position": {
+        "x": 1080,
+        "y": 30
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Dealer Count Memory",
+        "description": "Stores the latest complete public shoe snapshot for the Dealer Agent.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "replace",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-player-one-memory",
+      "type": "synapseNode",
+      "position": {
+        "x": 1080,
+        "y": 210
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Player One Count Memory",
+        "description": "Stores the latest complete public shoe snapshot for Player One.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "replace",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-player-two-memory",
+      "type": "synapseNode",
+      "position": {
+        "x": 1080,
+        "y": 390
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Player Two Count Memory",
+        "description": "Stores the latest complete public shoe snapshot for Player Two.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "replace",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-player-three-memory",
+      "type": "synapseNode",
+      "position": {
+        "x": 1080,
+        "y": 570
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Player Three Count Memory",
+        "description": "Stores the latest complete public shoe snapshot for Player Three.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "replace",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-round-ledger",
+      "type": "synapseNode",
+      "position": {
+        "x": 1440,
+        "y": 210
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Round Ledger",
+        "description": "Appends each completed round across continuation sessions.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-table-display",
+      "type": "synapseNode",
+      "position": {
+        "x": 1440,
+        "y": 390
+      },
+      "data": {
+        "kind": "output",
+        "label": "Table Display",
+        "description": "Shows current player and Dealer turns plus the completed round.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {},
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "four-agent-blackjack-edge-trigger-engine",
+      "source": "four-agent-blackjack-next-round-trigger",
+      "target": "four-agent-blackjack-table-engine",
+      "type": "smoothstep",
+      "label": "trigger",
+      "data": {
+        "channel": "trigger"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#e6b84a"
+      },
+      "style": {
+        "stroke": "#e6b84a",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-dealer-memory",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-dealer-memory",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-one-memory",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-player-one-memory",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-two-memory",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-player-two-memory",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-three-memory",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-player-three-memory",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-dealer",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-dealer-agent",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-one",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-player-one",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-two",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-player-two",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-three",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-player-three",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-dealer-engine",
+      "source": "four-agent-blackjack-dealer-agent",
+      "target": "four-agent-blackjack-table-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-one-engine",
+      "source": "four-agent-blackjack-player-one",
+      "target": "four-agent-blackjack-table-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-two-engine",
+      "source": "four-agent-blackjack-player-two",
+      "target": "four-agent-blackjack-table-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-three-engine",
+      "source": "four-agent-blackjack-player-three",
+      "target": "four-agent-blackjack-table-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-dealer-memory-read",
+      "source": "four-agent-blackjack-dealer-memory",
+      "target": "four-agent-blackjack-dealer-agent",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#a78bd4"
+      },
+      "style": {
+        "stroke": "#a78bd4",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-one-memory-read",
+      "source": "four-agent-blackjack-player-one-memory",
+      "target": "four-agent-blackjack-player-one",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#a78bd4"
+      },
+      "style": {
+        "stroke": "#a78bd4",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-two-memory-read",
+      "source": "four-agent-blackjack-player-two-memory",
+      "target": "four-agent-blackjack-player-two",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#a78bd4"
+      },
+      "style": {
+        "stroke": "#a78bd4",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-three-memory-read",
+      "source": "four-agent-blackjack-player-three-memory",
+      "target": "four-agent-blackjack-player-three",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#a78bd4"
+      },
+      "style": {
+        "stroke": "#a78bd4",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-ledger",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-round-ledger",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-display",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-table-display",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    }
+  ]
+}

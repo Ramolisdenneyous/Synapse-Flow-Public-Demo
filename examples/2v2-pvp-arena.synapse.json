@@ -1,0 +1,426 @@
+{
+  "version": 1,
+  "name": "Two Versus Two PVP Arena",
+  "nodes": [
+    {
+      "id": "pvp-start-trigger",
+      "type": "synapseNode",
+      "position": {
+        "x": 40,
+        "y": 350
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Start Match",
+        "description": "Starts or resets the two-versus-two arena match.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "payload": "START_MATCH"
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "pvp-combat-engine",
+      "type": "synapseNode",
+      "position": {
+        "x": 350,
+        "y": 350
+      },
+      "data": {
+        "kind": "logic",
+        "label": "Combat Engine",
+        "description": "Owns initiative, turn order, HP, attacks, eliminations, and victory.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "operation": "generated",
+          "routerPrompt": "Run a complete two-versus-two arena match.\n\nCombatants:\n- Team Azure: Lumen and Spark.\n- Team Crimson: Bolt and Chip.\n- Every combatant starts with 10 HP.\n\nOn START_MATCH, create a uniformly random tie-free d20 initiative order and send\nthe first public turn state only to the active combatant, Battle Chronicle, and\nArena Feed. Each combatant returns strict JSON containing actor, action \"attack\",\ntarget, and the supplied turnToken.\n\nValidate that the response belongs to the current living actor and targets a\nliving opponent. Invalid decisions retry the same actor without advancing.\nFor valid attacks, uniformly map fresh runtime randomness across all d20 attack\nand d8 damage pairs. Rolls of 11 or higher hit. Apply damage, remove defeated\ncombatants from future turns, and advance through the initiative order.\n\nEvery valid turn sends one public state snapshot to the next active combatant,\nBattle Chronicle, and Arena Feed. When one team has no living combatants, send\nthe final result only to Battle Chronicle and Arena Feed so the queue ends.",
+          "generatedCode": "function route(input, context, state) {\n  const agents = [\n    { name: \"Lumen\", team: \"Azure\", id: \"pvp-agent-lumen\" },\n    { name: \"Spark\", team: \"Azure\", id: \"pvp-agent-spark\" },\n    { name: \"Bolt\", team: \"Crimson\", id: \"pvp-agent-bolt\" },\n    { name: \"Chip\", team: \"Crimson\", id: \"pvp-agent-chip\" }\n  ];\n  const memoryId = \"pvp-battle-chronicle\";\n  const outputId = \"pvp-arena-feed\";\n\n  function permutationCount(available, slots) {\n    let total = 1;\n    for (let index = 0; index < slots; index += 1) total *= available - index;\n    return total;\n  }\n\n  function rollInitiative(randomValue) {\n    const pool = Array.from({ length: 20 }, (_, index) => index + 1);\n    const totalOutcomes = permutationCount(20, agents.length);\n    let outcome = Math.min(totalOutcomes - 1, Math.floor(randomValue * totalOutcomes));\n    const rolls = {};\n\n    for (let slot = 0; slot < agents.length; slot += 1) {\n      const remainingSlots = agents.length - slot - 1;\n      const blockSize = permutationCount(pool.length - 1, remainingSlots);\n      const choice = Math.floor(outcome / blockSize);\n      outcome %= blockSize;\n      rolls[agents[slot].name] = pool.splice(choice, 1)[0];\n    }\n\n    const order = agents\n      .map((agent) => agent.name)\n      .sort((left, right) => rolls[right] - rolls[left]);\n    return { rolls, order };\n  }\n\n  function canonicalName(value) {\n    const match = agents.find(\n      (agent) => agent.name.toLowerCase() === String(value || \"\").trim().toLowerCase()\n    );\n    return match ? match.name : \"\";\n  }\n\n  function parseDecision(value) {\n    if (value && typeof value === \"object\" && !Array.isArray(value)) return value;\n    const text = String(value || \"\").trim();\n    const start = text.indexOf(\"{\");\n    const end = text.lastIndexOf(\"}\");\n    if (start < 0 || end < start) return null;\n    try {\n      return JSON.parse(text.slice(start, end + 1));\n    } catch {\n      return null;\n    }\n  }\n\n  function agentByName(name) {\n    return agents.find((agent) => agent.name === name);\n  }\n\n  function livingEnemies(actor, hp) {\n    const team = agentByName(actor).team;\n    return agents\n      .filter((agent) => agent.team !== team && hp[agent.name] > 0)\n      .map((agent) => agent.name);\n  }\n\n  function livingTeams(hp) {\n    return [\"Azure\", \"Crimson\"].filter((team) =>\n      agents.some((agent) => agent.team === team && hp[agent.name] > 0)\n    );\n  }\n\n  function nextLivingIndex(order, hp, currentIndex) {\n    for (let offset = 1; offset <= order.length; offset += 1) {\n      const index = (currentIndex + offset) % order.length;\n      if (hp[order[index]] > 0) return index;\n    }\n    return currentIndex;\n  }\n\n  function publicTurn(matchState, event) {\n    const actor = matchState.initiative[matchState.turnIndex];\n    return {\n      type: \"turn\",\n      status: \"active\",\n      round: matchState.round,\n      turn: matchState.turn,\n      actor,\n      actorTeam: agentByName(actor).team,\n      turnToken: matchState.turnToken,\n      teams: {\n        Azure: [\"Lumen\", \"Spark\"],\n        Crimson: [\"Bolt\", \"Chip\"]\n      },\n      hp: matchState.hp,\n      initiative: matchState.initiative,\n      initiativeRolls: matchState.initiativeRolls,\n      legalTargets: livingEnemies(actor, matchState.hp),\n      lastEvent: event,\n      instruction: \"Return one JSON attack decision for the current actor.\"\n    };\n  }\n\n  const startRequested =\n    String(input || \"\").trim().toUpperCase() === \"START_MATCH\" ||\n    (input && typeof input === \"object\" && input.type === \"start_match\");\n\n  if (!state.initialized || startRequested) {\n    const initiative = rollInitiative(context.runtime.randomValue);\n    const firstActor = initiative.order[0];\n    const nextState = {\n      initialized: true,\n      status: \"active\",\n      hp: { Lumen: 10, Spark: 10, Bolt: 10, Chip: 10 },\n      initiative: initiative.order,\n      initiativeRolls: initiative.rolls,\n      turnIndex: 0,\n      round: 1,\n      turn: 1,\n      turnToken: \"turn-1-\" + firstActor + \"-\" + context.runtime.invocationId.slice(0, 8)\n    };\n    const event = {\n      kind: \"match_started\",\n      message: \"Initiative is set. \" + firstActor + \" acts first.\"\n    };\n    return {\n      targetIds: [agentByName(firstActor).id, memoryId, outputId],\n      payload: publicTurn(nextState, event),\n      state: nextState\n    };\n  }\n\n  if (state.status !== \"active\") {\n    return { drop: true, payload: input, state };\n  }\n\n  const actor = state.initiative[state.turnIndex];\n  const decision = parseDecision(input);\n  const claimedActor = canonicalName(decision && decision.actor);\n  const target = canonicalName(decision && decision.target);\n  const legalTargets = livingEnemies(actor, state.hp);\n  const valid =\n    decision &&\n    claimedActor === actor &&\n    decision.action === \"attack\" &&\n    decision.turnToken === state.turnToken &&\n    legalTargets.includes(target);\n\n  if (!valid) {\n    return {\n      targetIds: [agentByName(actor).id],\n      payload: {\n        ...publicTurn(state, {\n          kind: \"invalid_decision\",\n          message: \"The decision was invalid. Use the exact actor, token, action, and a living enemy.\"\n        }),\n        type: \"retry\"\n      },\n      state\n    };\n  }\n\n  const outcome = Math.min(159, Math.floor(context.runtime.randomValue * 160));\n  const attackRoll = Math.floor(outcome / 8) + 1;\n  const damageRoll = (outcome % 8) + 1;\n  const hit = attackRoll >= 11;\n  const hp = { ...state.hp };\n  const damage = hit ? damageRoll : 0;\n  if (hit) hp[target] = Math.max(0, hp[target] - damage);\n\n  const defeated = hit && hp[target] === 0;\n  const event = {\n    kind: \"attack\",\n    actor,\n    target,\n    attackRoll,\n    hit,\n    damage,\n    defeated,\n    message: hit\n      ? actor + \" hit \" + target + \" for \" + damage + \" damage.\"\n      : actor + \" missed \" + target + \".\"\n  };\n  const teamsAlive = livingTeams(hp);\n\n  if (teamsAlive.length === 1) {\n    const finishedState = {\n      ...state,\n      status: \"finished\",\n      hp,\n      turn: state.turn + 1,\n      winner: teamsAlive[0],\n      lastEvent: event\n    };\n    return {\n      targetIds: [memoryId, outputId],\n      payload: {\n        type: \"match_complete\",\n        status: \"finished\",\n        winner: teamsAlive[0],\n        hp,\n        initiative: state.initiative,\n        finalEvent: event,\n        message: \"Team \" + teamsAlive[0] + \" wins.\"\n      },\n      state: finishedState\n    };\n  }\n\n  const nextIndex = nextLivingIndex(state.initiative, hp, state.turnIndex);\n  const nextActor = state.initiative[nextIndex];\n  const wrapped = nextIndex <= state.turnIndex;\n  const nextState = {\n    ...state,\n    hp,\n    turnIndex: nextIndex,\n    round: state.round + (wrapped ? 1 : 0),\n    turn: state.turn + 1,\n    turnToken:\n      \"turn-\" +\n      (state.turn + 1) +\n      \"-\" +\n      nextActor +\n      \"-\" +\n      context.runtime.invocationId.slice(0, 8),\n    lastEvent: event\n  };\n\n  return {\n    targetIds: [agentByName(nextActor).id, memoryId, outputId],\n    payload: publicTurn(nextState, event),\n    state: nextState\n  };\n}",
+          "generatedSummary": "Runs a validated 2v2 match with uniform initiative and attack outcomes.",
+          "generatedAt": "2026-07-30T00:00:00.000Z",
+          "generatedJobId": "pvp-bootstrap",
+          "rules": "",
+          "template": "{{input}}"
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "pvp-agent-lumen",
+      "type": "synapseNode",
+      "position": {
+        "x": 720,
+        "y": 80
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Lumen",
+        "description": "Team Azure combatant. Chooses one legal opponent on each assigned turn.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Lumen, a tactical combatant on Team Azure. Your teammate is Spark. Your opponents are Bolt and Chip.\n\nYou receive the authoritative public state from the Combat Engine. When type is \"turn\" or \"retry\" and actor is \"Lumen\", choose exactly one name from legalTargets.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"actor\":\"Lumen\",\"action\":\"attack\",\"target\":\"LEGAL_TARGET\",\"turnToken\":\"TOKEN_FROM_INPUT\"}\n\nCopy turnToken exactly. Never invent dice rolls, damage, HP, targets, or actions. The Combat Engine resolves all rules.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 180
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "pvp-agent-spark",
+      "type": "synapseNode",
+      "position": {
+        "x": 720,
+        "y": 260
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Spark",
+        "description": "Team Azure combatant. Chooses one legal opponent on each assigned turn.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Spark, a tactical combatant on Team Azure. Your teammate is Lumen. Your opponents are Bolt and Chip.\n\nYou receive the authoritative public state from the Combat Engine. When type is \"turn\" or \"retry\" and actor is \"Spark\", choose exactly one name from legalTargets.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"actor\":\"Spark\",\"action\":\"attack\",\"target\":\"LEGAL_TARGET\",\"turnToken\":\"TOKEN_FROM_INPUT\"}\n\nCopy turnToken exactly. Never invent dice rolls, damage, HP, targets, or actions. The Combat Engine resolves all rules.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 180
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "pvp-agent-bolt",
+      "type": "synapseNode",
+      "position": {
+        "x": 720,
+        "y": 500
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Bolt",
+        "description": "Team Crimson combatant. Chooses one legal opponent on each assigned turn.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Bolt, a tactical combatant on Team Crimson. Your teammate is Chip. Your opponents are Lumen and Spark.\n\nYou receive the authoritative public state from the Combat Engine. When type is \"turn\" or \"retry\" and actor is \"Bolt\", choose exactly one name from legalTargets.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"actor\":\"Bolt\",\"action\":\"attack\",\"target\":\"LEGAL_TARGET\",\"turnToken\":\"TOKEN_FROM_INPUT\"}\n\nCopy turnToken exactly. Never invent dice rolls, damage, HP, targets, or actions. The Combat Engine resolves all rules.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 180
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "pvp-agent-chip",
+      "type": "synapseNode",
+      "position": {
+        "x": 720,
+        "y": 680
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Chip",
+        "description": "Team Crimson combatant. Chooses one legal opponent on each assigned turn.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Chip, a tactical combatant on Team Crimson. Your teammate is Bolt. Your opponents are Lumen and Spark.\n\nYou receive the authoritative public state from the Combat Engine. When type is \"turn\" or \"retry\" and actor is \"Chip\", choose exactly one name from legalTargets.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"actor\":\"Chip\",\"action\":\"attack\",\"target\":\"LEGAL_TARGET\",\"turnToken\":\"TOKEN_FROM_INPUT\"}\n\nCopy turnToken exactly. Never invent dice rolls, damage, HP, targets, or actions. The Combat Engine resolves all rules.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 180
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "pvp-battle-chronicle",
+      "type": "synapseNode",
+      "position": {
+        "x": 1100,
+        "y": 250
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Battle Chronicle",
+        "description": "Stores each authoritative public turn and the final match result.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "pvp-arena-feed",
+      "type": "synapseNode",
+      "position": {
+        "x": 1100,
+        "y": 520
+      },
+      "data": {
+        "kind": "output",
+        "label": "Arena Feed",
+        "description": "Displays the latest public turn or final victory result.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {},
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "pvp-edge-start-engine",
+      "source": "pvp-start-trigger",
+      "target": "pvp-combat-engine",
+      "type": "smoothstep",
+      "label": "trigger",
+      "data": {
+        "channel": "trigger"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#e6b84a"
+      },
+      "style": {
+        "stroke": "#e6b84a",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "pvp-edge-engine-lumen",
+      "source": "pvp-combat-engine",
+      "target": "pvp-agent-lumen",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "pvp-edge-engine-spark",
+      "source": "pvp-combat-engine",
+      "target": "pvp-agent-spark",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "pvp-edge-engine-bolt",
+      "source": "pvp-combat-engine",
+      "target": "pvp-agent-bolt",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "pvp-edge-engine-chip",
+      "source": "pvp-combat-engine",
+      "target": "pvp-agent-chip",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "pvp-edge-lumen-engine",
+      "source": "pvp-agent-lumen",
+      "target": "pvp-combat-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "pvp-edge-spark-engine",
+      "source": "pvp-agent-spark",
+      "target": "pvp-combat-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "pvp-edge-bolt-engine",
+      "source": "pvp-agent-bolt",
+      "target": "pvp-combat-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "pvp-edge-chip-engine",
+      "source": "pvp-agent-chip",
+      "target": "pvp-combat-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "pvp-edge-engine-memory",
+      "source": "pvp-combat-engine",
+      "target": "pvp-battle-chronicle",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "pvp-edge-engine-output",
+      "source": "pvp-combat-engine",
+      "target": "pvp-arena-feed",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    }
+  ]
+}

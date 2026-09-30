@@ -1,0 +1,306 @@
+{
+  "format": "synapse-flow/harness",
+  "version": 2,
+  "name": "user input test",
+  "nodes": [
+    {
+      "id": "257e66ee-cc9b-4ba4-93d1-ffaa9808af38",
+      "type": "synapseNode",
+      "position": {
+        "x": 595.1078986749945,
+        "y": 366.50562519421317
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Bob",
+        "description": "Uses an LLM to reason over its event and allowed context.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Bob. You are writing a shared story with three agents, and a user.  You will receive the story as is.  You will write one paragraph and then pass the story on to the next agent in the series.  After all three agents have added a paragraph the story will return to you for one more paragraph.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700
+        }
+      }
+    },
+    {
+      "id": "2613c3fd-d9a9-4ffd-b1b0-66e984fbca79",
+      "type": "synapseNode",
+      "position": {
+        "x": 969.8818884738452,
+        "y": 221.79732918665138
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Memory",
+        "description": "Stores isolated state through explicit read and write edges.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": ""
+        }
+      }
+    },
+    {
+      "id": "34e61f28-fb17-45db-a0e8-6264e25ec2a6",
+      "type": "synapseNode",
+      "position": {
+        "x": 52.27594070695549,
+        "y": 77.22462941847206
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Trigger",
+        "description": "Prompt the start of the story",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "payload": "The story is yours, GO! "
+        }
+      }
+    },
+    {
+      "id": "39274605-c99d-4fd8-8e18-2beb1cb59d23",
+      "type": "synapseNode",
+      "position": {
+        "x": 257.0979276558288,
+        "y": 396.62458768295033
+      },
+      "data": {
+        "kind": "logic",
+        "label": "Router",
+        "description": "Routes or transforms events with deterministic rules.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "operation": "generated",
+          "routerPrompt": "Look at the output from the user and try to route it to Bob or Jen depending on the content from the user. ",
+          "generatedCode": "function route(input, context, state) {\n  var text = typeof input === \"string\"\n    ? input\n    : input && typeof input === \"object\" && typeof input.text === \"string\"\n      ? input.text\n      : JSON.stringify(input);\n\n  var mentionsBob = /\\bbob\\b/i.test(text || \"\");\n  var mentionsJen = /\\bjen\\b/i.test(text || \"\");\n\n  if (mentionsBob && !mentionsJen) {\n    return { targetIds: [\"257e66ee-cc9b-4ba4-93d1-ffaa9808af38\"], state: state || {} };\n  }\n\n  if (mentionsJen && !mentionsBob) {\n    return { targetIds: [\"4374a43f-d063-40d0-8f9c-74ceb2c6f5da\"], state: state || {} };\n  }\n\n  return {\n    targetIds: [\n      \"257e66ee-cc9b-4ba4-93d1-ffaa9808af38\",\n      \"4374a43f-d063-40d0-8f9c-74ceb2c6f5da\"\n    ],\n    state: state || {}\n  };\n}",
+          "generatedSummary": "Routes explicit Bob or Jen requests to that agent. Messages naming both or neither go to both so ambiguous user intent is not discarded.",
+          "generatedAt": "2026-07-31T23:22:33.605Z",
+          "generatedJobId": "df5538ca-5f17-4aca-8dd7-7e2f4867de1f",
+          "generatedAssumptions": [
+            "Agent names are the only topology-provided basis for distinguishing Bob from Jen.",
+            "Ambiguous messages should be delivered to both agents.",
+            "Input may be a string or an object with a text field."
+          ],
+          "generatedTests": [
+            {
+              "name": "Routes Bob mention to Bob",
+              "input": "Bob, please review this proposal.",
+              "randomValue": 0.1,
+              "expectedTargetIds": [
+                "257e66ee-cc9b-4ba4-93d1-ffaa9808af38"
+              ]
+            },
+            {
+              "name": "Routes Jen mention to Jen",
+              "input": "Can Jen summarize these notes?",
+              "randomValue": 0.5,
+              "expectedTargetIds": [
+                "4374a43f-d063-40d0-8f9c-74ceb2c6f5da"
+              ]
+            },
+            {
+              "name": "Routes both mentions to both agents",
+              "input": "Bob and Jen should compare their answers.",
+              "randomValue": 0.9,
+              "expectedTargetIds": [
+                "257e66ee-cc9b-4ba4-93d1-ffaa9808af38",
+                "4374a43f-d063-40d0-8f9c-74ceb2c6f5da"
+              ]
+            },
+            {
+              "name": "Routes an unaddressed message to both agents",
+              "input": "Please analyze the customer's request.",
+              "randomValue": 0.3,
+              "expectedTargetIds": [
+                "257e66ee-cc9b-4ba4-93d1-ffaa9808af38",
+                "4374a43f-d063-40d0-8f9c-74ceb2c6f5da"
+              ]
+            }
+          ],
+          "generatedVersions": [],
+          "rules": "urgent => Review Output\n* => Archive Output",
+          "template": "{{input}}"
+        }
+      }
+    },
+    {
+      "id": "4374a43f-d063-40d0-8f9c-74ceb2c6f5da",
+      "type": "synapseNode",
+      "position": {
+        "x": 595.1935098013464,
+        "y": 651.9512324980593
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Jen",
+        "description": "Uses an LLM to reason over its event and allowed context.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Jen. You are writing a shared story with three agents and one user.  You will receive the story as is.  You will write one paragraph and then pass the story on to the next agent in the series.  After all three agents have added a paragraph the story will return to you for one more paragraph.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700
+        }
+      }
+    },
+    {
+      "id": "9dc24780-c618-4491-8160-2041c7929164",
+      "type": "synapseNode",
+      "position": {
+        "x": 63.443359956522244,
+        "y": 265.5341048120666
+      },
+      "data": {
+        "kind": "user",
+        "label": "User Input",
+        "description": "Waits for human prose or simulates the user with an LLM.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "mode": "manual",
+          "systemPrompt": "Act as the human participant in this simulation. Respond naturally in prose and do not output JSON, code, or structured data.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700
+        }
+      }
+    },
+    {
+      "id": "ac53b2ef-43bf-426b-9a4f-8f0cc84a090b",
+      "type": "synapseNode",
+      "position": {
+        "x": 980.0465214547885,
+        "y": 31.614189557278436
+      },
+      "data": {
+        "kind": "output",
+        "label": "Output",
+        "description": "Captures the final event for inspection.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {}
+      }
+    },
+    {
+      "id": "edc5f5ae-546a-4dd8-b76a-4de3ad745465",
+      "type": "synapseNode",
+      "position": {
+        "x": 581.5670427197515,
+        "y": 75.92689392806669
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Luna Agent",
+        "description": "Uses an LLM to reason over its event and allowed context.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "Start a story about Bob, and Jen, write one paragraph",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "2d5cae9f-13ac-4eae-9991-d589d863401e",
+      "source": "34e61f28-fb17-45db-a0e8-6264e25ec2a6",
+      "target": "edc5f5ae-546a-4dd8-b76a-4de3ad745465",
+      "channel": "trigger"
+    },
+    {
+      "id": "32af2ff5-d742-469a-b7ba-4ad0dc1962d8",
+      "source": "2613c3fd-d9a9-4ffd-b1b0-66e984fbca79",
+      "target": "4374a43f-d063-40d0-8f9c-74ceb2c6f5da",
+      "targetHandle": "input",
+      "channel": "read"
+    },
+    {
+      "id": "347bfe7d-aa73-4ca7-a3d8-54e435234d33",
+      "source": "edc5f5ae-546a-4dd8-b76a-4de3ad745465",
+      "target": "2613c3fd-d9a9-4ffd-b1b0-66e984fbca79",
+      "targetHandle": "input",
+      "channel": "write"
+    },
+    {
+      "id": "34a1e725-7986-4a02-86c2-fbb6f9a7826e",
+      "source": "2613c3fd-d9a9-4ffd-b1b0-66e984fbca79",
+      "target": "ac53b2ef-43bf-426b-9a4f-8f0cc84a090b",
+      "channel": "data"
+    },
+    {
+      "id": "42960471-7ec6-45ef-bb56-4993791b89a0",
+      "source": "257e66ee-cc9b-4ba4-93d1-ffaa9808af38",
+      "target": "9dc24780-c618-4491-8160-2041c7929164",
+      "targetHandle": "input",
+      "channel": "data"
+    },
+    {
+      "id": "683327a9-ba6c-4e13-836c-428fb6979380",
+      "source": "9dc24780-c618-4491-8160-2041c7929164",
+      "target": "39274605-c99d-4fd8-8e18-2beb1cb59d23",
+      "targetHandle": "input",
+      "channel": "data"
+    },
+    {
+      "id": "81e3d7c0-82ac-4199-a4f6-5abaf482e53e",
+      "source": "257e66ee-cc9b-4ba4-93d1-ffaa9808af38",
+      "target": "2613c3fd-d9a9-4ffd-b1b0-66e984fbca79",
+      "targetHandle": "input",
+      "channel": "write"
+    },
+    {
+      "id": "8327482a-11f5-4f86-9a52-904287fa9324",
+      "source": "2613c3fd-d9a9-4ffd-b1b0-66e984fbca79",
+      "target": "edc5f5ae-546a-4dd8-b76a-4de3ad745465",
+      "targetHandle": "input",
+      "channel": "read"
+    },
+    {
+      "id": "9043b78a-46fc-4e02-9f56-8e190e917b0a",
+      "source": "edc5f5ae-546a-4dd8-b76a-4de3ad745465",
+      "target": "9dc24780-c618-4491-8160-2041c7929164",
+      "targetHandle": "input",
+      "channel": "data"
+    },
+    {
+      "id": "a082806f-697e-481c-a031-18f8cf940595",
+      "source": "39274605-c99d-4fd8-8e18-2beb1cb59d23",
+      "target": "257e66ee-cc9b-4ba4-93d1-ffaa9808af38",
+      "targetHandle": "input",
+      "channel": "data"
+    },
+    {
+      "id": "cafa645e-d99a-4238-8c81-3e17b879a7ab",
+      "source": "4374a43f-d063-40d0-8f9c-74ceb2c6f5da",
+      "target": "2613c3fd-d9a9-4ffd-b1b0-66e984fbca79",
+      "targetHandle": "input",
+      "channel": "write"
+    },
+    {
+      "id": "eb826a21-cff3-493d-9a22-e42ac89ded80",
+      "source": "39274605-c99d-4fd8-8e18-2beb1cb59d23",
+      "target": "4374a43f-d063-40d0-8f9c-74ceb2c6f5da",
+      "targetHandle": "input",
+      "channel": "data"
+    },
+    {
+      "id": "f196679c-6f7c-497a-9c01-a644df8f6e12",
+      "source": "2613c3fd-d9a9-4ffd-b1b0-66e984fbca79",
+      "target": "257e66ee-cc9b-4ba4-93d1-ffaa9808af38",
+      "targetHandle": "input",
+      "channel": "read"
+    },
+    {
+      "id": "f2e589ac-3318-45ca-aed9-a443b252f26a",
+      "source": "4374a43f-d063-40d0-8f9c-74ceb2c6f5da",
+      "target": "9dc24780-c618-4491-8160-2041c7929164",
+      "targetHandle": "input",
+      "channel": "data"
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "name": "synapse-flow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n api,ui -c yellow,cyan \"node --watch server/index.js\" \"vite\"",
+    "start": "node server/index.js",
+    "build": "vite build",
+    "build:blackjack": "node scripts/build-blackjack-harness.mjs",
+    "build:blackjack-agents": "node scripts/build-four-agent-blackjack-harness.mjs",
+    "build:blackjack-counting": "node scripts/build-counting-blackjack-harness.mjs",
+    "build:blackjack-codex-test": "node scripts/build-counting-blackjack-coding-agent-test.mjs",
+    "build:pvp": "node scripts/build-pvp-harness.mjs",
+    "build:go-fish": "node scripts/build-go-fish-harness.mjs",
+    "build:story-engine": "node scripts/build-story-engine-harness.mjs",
+    "build:story-engine-gm-tools": "node scripts/build-story-engine-gm-tools-harness.mjs",
+    "build:user-input-demo": "node scripts/build-user-input-demo.mjs",
+    "build:api-search-demo": "node scripts/build-api-search-demo.mjs",
+    "rag:index": "node scripts/build-local-rag-index.mjs",
+    "rag:query": "node scripts/query-local-rag-index.mjs",
+    "build:drone-commander": "node scripts/build-drone-commander-harness.mjs",
+    "build:drone-commander-capacity": "node scripts/build-drone-commander-capacity-harness.mjs",
+    "check:3d": "node scripts/check-3d-view.mjs",
+    "check:search": "node scripts/check-api-search-view.mjs",
+    "check:local-rag": "node scripts/check-local-rag-view.mjs",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.11.2",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "lucide-react": "^1.27.0",
+    "openai": "^6.49.0",
+    "pdfjs-dist": "^6.2.108",
+    "quickjs-emscripten": "^0.32.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.4",
+    "concurrently": "^10.0.4",
+    "playwright": "^1.62.1",
+    "pngjs": "^7.0.0",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
+  }
+}

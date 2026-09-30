@@ -1,0 +1,683 @@
+{
+  "version": 1,
+  "name": "Four Agent Counting Blackjack - Coding Agent Test",
+  "nodes": [
+    {
+      "id": "four-agent-blackjack-next-round-trigger",
+      "type": "synapseNode",
+      "position": {
+        "x": 40,
+        "y": 370
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Deal Next Round",
+        "description": "Starts a fresh table or continues with the remaining deck after a completed round.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "payload": "DEAL_ROUND",
+          "continueState": true
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-table-engine",
+      "type": "synapseNode",
+      "position": {
+        "x": 340,
+        "y": 370
+      },
+      "data": {
+        "kind": "logic",
+        "label": "Table Engine",
+        "description": "Blank Table Engine ready for Codex to build from the complete Routing intent.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "operation": "generated",
+          "routerPrompt": "AUTHORITY\nImplement the complete deterministic Table Engine for one single-deck blackjack\nround. The Router owns the deck, dealing, hands, totals, phases, legal-action\nvalidation, correlation tokens, public card history, Hi-Lo reference count,\ncontinuation state, and scoring. The four Luna Agents choose only hit or stand.\nNever ask an Agent to invent, deal, remove, or validate cards.\n\nCONNECTED IDS\n- Trigger: four-agent-blackjack-next-round-trigger\n- Router: four-agent-blackjack-table-engine\n- Dealer Agent: four-agent-blackjack-dealer-agent\n- Player Agents: four-agent-blackjack-player-one,\n  four-agent-blackjack-player-two, four-agent-blackjack-player-three\n- Private Count Memories: four-agent-blackjack-dealer-memory,\n  four-agent-blackjack-player-one-memory,\n  four-agent-blackjack-player-two-memory,\n  four-agent-blackjack-player-three-memory\n- Completed-round Memory: four-agent-blackjack-round-ledger\n- Observer Output: four-agent-blackjack-table-display\n\nLITERAL INPUT CONTRACTS\n1. Deal Next Round emits the primitive string \"DEAL_ROUND\". It does not emit an\n   object. Start a round when String(input).trim().toUpperCase() is DEAL_ROUND.\n2. Every Luna Agent returns raw model text. Extract the first complete JSON object\n   from that string and parse it. Also tolerate an already-parsed plain object.\n3. Player One returns:\n   {\"player\":\"Player One\",\"action\":\"hit\",\"actionToken\":\"TOKEN_FROM_INPUT\",\"countReport\":{\"shoe\":1,\"runningCount\":0,\"trueCount\":0,\"seenCards\":7}}\n   Player Two and Player Three use their exact display Names in player.\n4. Dealer Agent returns:\n   {\"dealer\":\"Dealer\",\"action\":\"hit\",\"actionToken\":\"TOKEN_FROM_INPUT\",\"countReport\":{\"shoe\":1,\"runningCount\":0,\"trueCount\":0,\"seenCards\":8}}\n5. countReport is advisory. Ignore it for authoritative mechanics. Accept it and\n   any other harmless extra fields. Validate identity, action, and actionToken.\n\nPRIVATE ROUTER STATE\nKeep JSON-safe fields sufficient for:\n- initialized, phase (\"players\", \"dealer\", or \"round_complete\")\n- shoe and round numbers\n- remaining deck as unique card codes\n- hands keyed by \"Dealer\", \"Player One\", \"Player Two\", and \"Player Three\"\n- statuses for all four participants\n- current playerIndex\n- actionNumber and actionToken\n- reshuffled and dealerRevealed booleans\n- cumulative revealedCards for the current shoe\n- final results\nManual Trigger continuation preserves this state. A normal Run All supplies\nempty state. DEAL_ROUND after round_complete begins one new round from the same\nremaining deck unless the reshuffle condition applies.\n\nDECK AND DEAL\n- A fresh deck contains exactly 52 unique codes. Suits are S, H, D, C. Ranks are\n  A,2,3,4,5,6,7,8,9,10,J,Q,K. A card is rank plus suit, such as 10H or AS.\n- Shuffle only when no prior deck exists or fewer than 20 cards remain. Increment\n  shoe and reset revealedCards only when shuffling.\n- Use context.runtime.randomValue as the seed for a deterministic Fisher-Yates\n  shuffle. A small local seeded PRNG may expand that one runtime value.\n- Deal two passes in this exact order: Player One, Player Two, Player Three,\n  Dealer. Remove dealt cards from the remaining deck.\n- All six player cards and only the Dealer up card are public after the deal.\n  Append those seven cards to revealedCards in deal order. Do not expose or count\n  the Dealer hole card yet.\n- Mark a two-card player total of 21 as blackjack and skip that player's turn.\n\nHAND VALUES AND RULES\n- Aces count as 11, reduced to 1 as needed to avoid busting.\n- J, Q, and K count as 10.\n- Players may hit or stand. A hit removes exactly one card from the deck, appends\n  it to that hand and revealedCards, and requests another decision unless the\n  hand reaches 21 or busts.\n- A stand ends that player's turn. Then activate the next waiting player.\n- Before Dealer Agent's first turn, reveal the Dealer hole card exactly once and\n  append it to revealedCards.\n- Dealer legalActions contains only [\"hit\"] below 17 and only [\"stand\"] on hard\n  or soft 17 and above. The Router enforces this rule but the Dealer Agent must\n  return every Dealer action.\n- A Dealer hit reveals exactly one card. Continue Dealer Agent turns until stand\n  or bust.\n- Support only hit and stand. Do not add betting, splits, doubles, surrender, or\n  insurance.\n\nCOUNTING SNAPSHOT\nEvery Agent-turn, retry, and round-complete payload must contain a counting\nobject computed only from revealedCards:\n- system: \"Hi-Lo\"\n- shoe\n- revealedCards in reveal order\n- seenCards and unseenCards\n- cardsDealt and cardsRemaining\n- runningCount: ranks 2-6 are +1, 7-9 are 0, 10/J/Q/K/A are -1\n- decksRemaining, no lower than 0.25\n- trueCount = runningCount / decksRemaining\n- penetration\n- rankFrequencies\n- unseenByRank, starting from four of each rank\nReasonable numeric rounding is allowed. The cumulative revealedCards sequence\nis authoritative, so later Agents and continuation rounds can independently\ncheck the count without double-counting.\n\nPUBLIC TABLE\nEvery public payload must also contain publicTable with all three player hands\nand totals, participant statuses, Dealer up card, Dealer hidden-card count, and\nDealer hand. Before dealerRevealed, Dealer hand contains only the up card and the\nhidden-card count is 1. After reveal it contains the complete Dealer hand and the\nhidden-card count is 0.\n\nTOKENS AND INVALID INPUT\n- Create a fresh actionToken for every requested decision using round,\n  actionNumber, participant identity, and context.runtime.invocationId.\n- Player identity must exactly match the currently active player.\n- Dealer identity must exactly be \"Dealer\".\n- action must be lowercase hit or stand and must be present in legalActions.\n- A malformed JSON string, stale token, wrong identity, or illegal action does\n  not mutate deck, hands, status, phase, playerIndex, or actionNumber.\n- Retry the same Agent with type \"retry\" for a player or \"dealer_retry\" for the\n  Dealer, a useful lastEvent error, and the same actionToken.\n\nAGENT TURN PAYLOADS\nPlayer turn type is \"player_turn\" and contains:\nround, shoe, player, hand, total, soft, dealerUpCard, dealerHiddenCards,\nlegalActions [\"hit\",\"stand\"], actionToken, cardsRemaining, publicTable, counting,\nlastEvent, and an instruction to return one strict JSON decision.\n\nDealer turn type is \"dealer_turn\" and contains:\nround, shoe, dealer \"Dealer\", full Dealer hand, total, soft, the one-item\nlegalActions array, actionToken, cardsRemaining, playerTotals, publicTable,\ncounting, lastEvent, and an instruction to return the one legal action.\n\nEXACT ACTIVE ROUTING\nBefore an Agent acts, write the same complete turn payload to only that Agent's\nprivate Count Memory, then activate that Agent and update Table Display:\n- Dealer: [\"four-agent-blackjack-dealer-memory\",\n  \"four-agent-blackjack-dealer-agent\",\n  \"four-agent-blackjack-table-display\"]\n- Player One: [\"four-agent-blackjack-player-one-memory\",\n  \"four-agent-blackjack-player-one\",\n  \"four-agent-blackjack-table-display\"]\n- Player Two: [\"four-agent-blackjack-player-two-memory\",\n  \"four-agent-blackjack-player-two\",\n  \"four-agent-blackjack-table-display\"]\n- Player Three: [\"four-agent-blackjack-player-three-memory\",\n  \"four-agent-blackjack-player-three\",\n  \"four-agent-blackjack-table-display\"]\nKeep each Memory ID before its Agent ID in targetIds for Sequential mode.\n\nROUND COMPLETION\n- Reveal the Dealer hole card before scoring, including Dealer blackjack.\n- Player bust loses. A two-card player 21 is blackjack unless Dealer also has a\n  two-card 21, which is a push. Dealer blackjack beats other non-blackjack hands.\n  Dealer bust makes every non-busted player win. Otherwise compare totals.\n- Emit type \"round_complete\" with round, shoe, complete hands, totals, results,\n  dealerStatus, cardsRemaining, publicTable, counting, lastEvent, and a message\n  telling the user to fire Deal Next Round.\n- Synchronize all four private Count Memories, append Round Ledger, and update\n  Table Display with exactly:\n  [\"four-agent-blackjack-dealer-memory\",\n   \"four-agent-blackjack-player-one-memory\",\n   \"four-agent-blackjack-player-two-memory\",\n   \"four-agent-blackjack-player-three-memory\",\n   \"four-agent-blackjack-round-ledger\",\n   \"four-agent-blackjack-table-display\"]\n- Do not target any Agent or Trigger after round completion.\n\nGENERATION TEST CONTRACT\n- tests[].input is passed directly to route as a literal string with state {}.\n- Do not put {\"input\":...,\"state\":...} or any wrapper into tests[].input.\n- Include at least one fresh-round test whose input field is exactly\n  \"DEAL_ROUND\". Choose a randomValue that does not deal Player One blackjack and\n  expect exactly Player One Count Memory, Player One, and Table Display.\n- Do not invent non-empty Router state inside tests[].input. Stateful behavior\n  will be tested separately by the user.\n- Keep generated code synchronous, explicit, JSON-safe, and under the Router\n  sandbox's 24,000-character limit.",
+          "generatedCode": "",
+          "generatedSummary": "",
+          "generatedAt": null,
+          "generatedJobId": null,
+          "rules": "",
+          "template": "{{input}}"
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-dealer-agent",
+      "type": "synapseNode",
+      "position": {
+        "x": 700,
+        "y": 30
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Dealer Agent",
+        "description": "Uses private shoe memory while controlling each required Dealer action.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are the Dealer at a blackjack table.\n\nYou receive an authoritative dealer_turn or dealer_retry payload from the Table\nEngine. It contains the Dealer hand, total, whether it is soft, legalActions,\nand actionToken.\n\nYour explicitly connected private memory contains the latest complete public\nobservation for the current shoe. Independently check its Hi-Lo running count:\n2 through 6 are +1, 7 through 9 are 0, and 10 through Ace are -1. Do not count\nthe same revealed card twice. A new shoe resets the count.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"dealer\":\"Dealer\",\"action\":\"hit\",\"actionToken\":\"TOKEN_FROM_INPUT\",\"countReport\":{\"shoe\":1,\"runningCount\":0,\"trueCount\":0,\"seenCards\":8}}\n\nChoose exactly the one action listed in legalActions. Copy actionToken exactly.\nReport your count from the newest public snapshot. Card counting does not let\nyou violate the Dealer's legal action.\nNever invent, deal, remove, or rename cards. The Table Engine controls the deck,\nvalidates your response, and scores the round.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 220
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-player-one",
+      "type": "synapseNode",
+      "position": {
+        "x": 700,
+        "y": 210
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Player One",
+        "description": "Uses private shoe memory and card counting to choose hit or stand.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Player One, one of three players at a blackjack table.\n\nYou receive an authoritative player_turn or retry payload from the Table Engine.\nChoose exactly one action from legalActions.\n\nYour explicitly connected private memory contains the latest complete public\nobservation for the current shoe. Independently check its Hi-Lo running count:\n2 through 6 are +1, 7 through 9 are 0, and 10 through Ace are -1. Do not count\nthe same revealed card twice. A new shoe resets the count.\n\nUse sensible blackjack play:\n- Stand on hard 17 or higher.\n- Hit hard 11 or lower.\n- On hard 12, stand against Dealer 4 through 6 and otherwise hit.\n- On hard 13 through 16, stand against Dealer 2 through 6 and otherwise hit.\n- On soft totals below 18, hit; on soft 19 or higher, stand.\n- On soft 18, stand against Dealer 2 through 8 and otherwise hit.\n- Use true-count deviations when relevant: stand on hard 16 versus Dealer 10 at\n  true count 0 or higher; stand on hard 15 versus Dealer 10 at +4 or higher;\n  stand on hard 12 versus Dealer 3 at +2 or higher, and versus Dealer 2 at +3\n  or higher.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"player\":\"Player One\",\"action\":\"hit\",\"actionToken\":\"TOKEN_FROM_INPUT\",\"countReport\":{\"shoe\":1,\"runningCount\":0,\"trueCount\":0,\"seenCards\":7}}\n\nThe action must be \"hit\" or \"stand\". Copy actionToken exactly. Never invent or\nalter cards. Report your count from the newest public snapshot. The Table Engine\nresolves all authoritative mechanics.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 240
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-player-two",
+      "type": "synapseNode",
+      "position": {
+        "x": 700,
+        "y": 390
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Player Two",
+        "description": "Uses private shoe memory and card counting to choose hit or stand.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Player Two, one of three players at a blackjack table.\n\nYou receive an authoritative player_turn or retry payload from the Table Engine.\nChoose exactly one action from legalActions.\n\nYour explicitly connected private memory contains the latest complete public\nobservation for the current shoe. Independently check its Hi-Lo running count:\n2 through 6 are +1, 7 through 9 are 0, and 10 through Ace are -1. Do not count\nthe same revealed card twice. A new shoe resets the count.\n\nUse sensible blackjack play:\n- Stand on hard 17 or higher.\n- Hit hard 11 or lower.\n- On hard 12, stand against Dealer 4 through 6 and otherwise hit.\n- On hard 13 through 16, stand against Dealer 2 through 6 and otherwise hit.\n- On soft totals below 18, hit; on soft 19 or higher, stand.\n- On soft 18, stand against Dealer 2 through 8 and otherwise hit.\n- Use true-count deviations when relevant: stand on hard 16 versus Dealer 10 at\n  true count 0 or higher; stand on hard 15 versus Dealer 10 at +4 or higher;\n  stand on hard 12 versus Dealer 3 at +2 or higher, and versus Dealer 2 at +3\n  or higher.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"player\":\"Player Two\",\"action\":\"hit\",\"actionToken\":\"TOKEN_FROM_INPUT\",\"countReport\":{\"shoe\":1,\"runningCount\":0,\"trueCount\":0,\"seenCards\":7}}\n\nThe action must be \"hit\" or \"stand\". Copy actionToken exactly. Never invent or\nalter cards. Report your count from the newest public snapshot. The Table Engine\nresolves all authoritative mechanics.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 240
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-player-three",
+      "type": "synapseNode",
+      "position": {
+        "x": 700,
+        "y": 570
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Player Three",
+        "description": "Uses private shoe memory and card counting to choose hit or stand.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Player Three, one of three players at a blackjack table.\n\nYou receive an authoritative player_turn or retry payload from the Table Engine.\nChoose exactly one action from legalActions.\n\nYour explicitly connected private memory contains the latest complete public\nobservation for the current shoe. Independently check its Hi-Lo running count:\n2 through 6 are +1, 7 through 9 are 0, and 10 through Ace are -1. Do not count\nthe same revealed card twice. A new shoe resets the count.\n\nUse sensible blackjack play:\n- Stand on hard 17 or higher.\n- Hit hard 11 or lower.\n- On hard 12, stand against Dealer 4 through 6 and otherwise hit.\n- On hard 13 through 16, stand against Dealer 2 through 6 and otherwise hit.\n- On soft totals below 18, hit; on soft 19 or higher, stand.\n- On soft 18, stand against Dealer 2 through 8 and otherwise hit.\n- Use true-count deviations when relevant: stand on hard 16 versus Dealer 10 at\n  true count 0 or higher; stand on hard 15 versus Dealer 10 at +4 or higher;\n  stand on hard 12 versus Dealer 3 at +2 or higher, and versus Dealer 2 at +3\n  or higher.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"player\":\"Player Three\",\"action\":\"hit\",\"actionToken\":\"TOKEN_FROM_INPUT\",\"countReport\":{\"shoe\":1,\"runningCount\":0,\"trueCount\":0,\"seenCards\":7}}\n\nThe action must be \"hit\" or \"stand\". Copy actionToken exactly. Never invent or\nalter cards. Report your count from the newest public snapshot. The Table Engine\nresolves all authoritative mechanics.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 240
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-dealer-memory",
+      "type": "synapseNode",
+      "position": {
+        "x": 1080,
+        "y": 30
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Dealer Count Memory",
+        "description": "Stores the latest complete public shoe snapshot for the Dealer Agent.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "replace",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-player-one-memory",
+      "type": "synapseNode",
+      "position": {
+        "x": 1080,
+        "y": 210
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Player One Count Memory",
+        "description": "Stores the latest complete public shoe snapshot for Player One.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "replace",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-player-two-memory",
+      "type": "synapseNode",
+      "position": {
+        "x": 1080,
+        "y": 390
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Player Two Count Memory",
+        "description": "Stores the latest complete public shoe snapshot for Player Two.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "replace",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-player-three-memory",
+      "type": "synapseNode",
+      "position": {
+        "x": 1080,
+        "y": 570
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Player Three Count Memory",
+        "description": "Stores the latest complete public shoe snapshot for Player Three.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "replace",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-round-ledger",
+      "type": "synapseNode",
+      "position": {
+        "x": 1440,
+        "y": 210
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Round Ledger",
+        "description": "Appends each completed round across continuation sessions.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "four-agent-blackjack-table-display",
+      "type": "synapseNode",
+      "position": {
+        "x": 1440,
+        "y": 390
+      },
+      "data": {
+        "kind": "output",
+        "label": "Table Display",
+        "description": "Shows current player and Dealer turns plus the completed round.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {},
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "four-agent-blackjack-edge-trigger-engine",
+      "source": "four-agent-blackjack-next-round-trigger",
+      "target": "four-agent-blackjack-table-engine",
+      "type": "smoothstep",
+      "label": "trigger",
+      "data": {
+        "channel": "trigger"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#e6b84a"
+      },
+      "style": {
+        "stroke": "#e6b84a",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-dealer-memory",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-dealer-memory",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-one-memory",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-player-one-memory",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-two-memory",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-player-two-memory",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-three-memory",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-player-three-memory",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-dealer",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-dealer-agent",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-one",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-player-one",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-two",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-player-two",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-three",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-player-three",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-dealer-engine",
+      "source": "four-agent-blackjack-dealer-agent",
+      "target": "four-agent-blackjack-table-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-one-engine",
+      "source": "four-agent-blackjack-player-one",
+      "target": "four-agent-blackjack-table-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-two-engine",
+      "source": "four-agent-blackjack-player-two",
+      "target": "four-agent-blackjack-table-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-three-engine",
+      "source": "four-agent-blackjack-player-three",
+      "target": "four-agent-blackjack-table-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-dealer-memory-read",
+      "source": "four-agent-blackjack-dealer-memory",
+      "target": "four-agent-blackjack-dealer-agent",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#a78bd4"
+      },
+      "style": {
+        "stroke": "#a78bd4",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-one-memory-read",
+      "source": "four-agent-blackjack-player-one-memory",
+      "target": "four-agent-blackjack-player-one",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#a78bd4"
+      },
+      "style": {
+        "stroke": "#a78bd4",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-two-memory-read",
+      "source": "four-agent-blackjack-player-two-memory",
+      "target": "four-agent-blackjack-player-two",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#a78bd4"
+      },
+      "style": {
+        "stroke": "#a78bd4",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-three-memory-read",
+      "source": "four-agent-blackjack-player-three-memory",
+      "target": "four-agent-blackjack-player-three",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#a78bd4"
+      },
+      "style": {
+        "stroke": "#a78bd4",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-ledger",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-round-ledger",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "four-agent-blackjack-edge-engine-display",
+      "source": "four-agent-blackjack-table-engine",
+      "target": "four-agent-blackjack-table-display",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    }
+  ]
+}

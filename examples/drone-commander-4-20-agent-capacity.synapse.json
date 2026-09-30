@@ -1,0 +1,1518 @@
+{
+  "format": "synapse-flow/harness",
+  "version": 2,
+  "name": "Drone Commander - Dynamic 4-20 Agent Capacity Harness",
+  "nodes": [
+    {
+      "id": "dc-cap-start",
+      "type": "synapseNode",
+      "position": {
+        "x": 30,
+        "y": 360
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Configure 4-20 Agent Drill",
+        "description": "Starts a one-round capacity drill with 2-10 deployed unit identities per side.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "payload": "CAPACITY_DRILL friendly=2 opposition=2",
+          "continueState": false
+        }
+      }
+    },
+    {
+      "id": "dc-cap-engine",
+      "type": "synapseNode",
+      "position": {
+        "x": 330,
+        "y": 360
+      },
+      "data": {
+        "kind": "logic",
+        "label": "Dynamic Battle Orchestrator",
+        "description": "Creates 4-20 persistent identities from deployment data and owns activation, validation, fallback, commit order, and drill completion.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "operation": "generated",
+          "routerPrompt": "Build a one-round Drone Commander capacity drill. Input from dc-cap-start is the editable string \"CAPACITY_DRILL friendly=N opposition=N\"; parse each integer and clamp it to 2-10. Also accept an equivalent object fixture in automated tests. Create a dynamic roster of 4-20 persistent identity records; never create fixed production classes from the canvas slots. Send a Commander brief and registry snapshot, then accept one prose directive. Activate every deployed identity exactly once in authoritative order by sending a capacity_activation_request to dc-cap-context-builder. Accept agent_tool_call_envelope responses only through dc-cap-governor. Validate exactly one select_tactical_option call, current activation_id, and offered option_id. Retry once without advancing, then commit a deterministic fallback. Send each committed event to dc-cap-post-commit and wait for its governed return before advancing. After all active identities commit, emit CAPACITY_DRILL_COMPLETE exactly once. The production architecture supports up to 20 identities but at most five provider requests in flight; this serial drill is the correctness baseline. Stable routes are dc-cap-commander, dc-cap-registry, dc-cap-live, dc-cap-context-builder, and dc-cap-post-commit.",
+          "generatedCode": "function route(input, context, state) {\n  function clone(value) { return JSON.parse(JSON.stringify(value)); }\n  function boundedCount(value) {\n    var number = Number(value);\n    if (!Number.isInteger(number)) return 2;\n    return Math.max(2, Math.min(10, number));\n  }\n  function slotId(side, number) {\n    var suffix = number < 10 ? '0' + number : String(number);\n    return 'dc-cap-' + side + '-' + suffix;\n  }\n  function roleFor(number) {\n    var roles = ['infantry', 'direct_attack', 'support', 'flanker', 'blocker'];\n    return roles[(number - 1) % roles.length];\n  }\n  function doctrineFor(side, number) {\n    var friendly = ['protect_commander', 'continue_objective', 'preserve_signal'];\n    var opposition = ['balanced', 'aggressive', 'defensive'];\n    var list = side === 'friendly' ? friendly : opposition;\n    return list[(number - 1) % list.length];\n  }\n  function buildRoster(friendlyCount, oppositionCount) {\n    var units = [];\n    var counts = { friendly: friendlyCount, opposition: oppositionCount };\n    ['friendly', 'opposition'].forEach(function (side) {\n      for (var number = 1; number <= counts[side]; number += 1) {\n        var padded = number < 10 ? '0' + number : String(number);\n        units.push({\n          agent_id: 'battle-agent-' + side + '-' + padded,\n          unit_id: side + '-unit-' + padded,\n          slot_node_id: slotId(side, number),\n          side: side,\n          display_name: (side === 'friendly' ? 'Coalition Unit ' : 'Opposition Unit ') + padded,\n          role: roleFor(number),\n          doctrine: doctrineFor(side, number),\n          alive: true,\n          active: true,\n          prompt_version: 'dc-tactical-v1'\n        });\n      }\n    });\n    return units;\n  }\n  function registrySnapshot(s) {\n    return {\n      type: 'battle_agent_registry',\n      battle_id: s.battleId,\n      capacity: { maximum_identities: 20, maximum_per_side: 10, maximum_provider_requests_in_flight: 5 },\n      deployed_counts: clone(s.deployedCounts),\n      active_identity_count: s.roster.length,\n      identities: clone(s.roster),\n      production_contract: 'Persist a dynamic collection of unit identities. Synapse slots visualize capacity and must not become fixed production classes, columns, processes, or deployment rows.'\n    };\n  }\n  function commanderBrief(s) {\n    return {\n      type: 'capacity_drill_commander_brief',\n      battle_id: s.battleId,\n      deployed_counts: clone(s.deployedCounts),\n      active_identity_count: s.roster.length,\n      maximum_identity_count: 20,\n      request: 'Give one concise global directive in prose. The drill will activate every deployed non-Commander identity exactly once.'\n    };\n  }\n  function makeOptions(s, actor, activationId) {\n    var enemy = s.roster.filter(function (unit) { return unit.side !== actor.side && unit.alive; })[0];\n    var options = [\n      { option_id: activationId + ':objective', tactical_intent: 'continue_objective', label: 'Advance the mission objective', execution_plan_id: 'plan-objective-' + actor.unit_id },\n      { option_id: activationId + ':cover', tactical_intent: 'nearest_cover', label: 'Move to the nearest legal cover', execution_plan_id: 'plan-cover-' + actor.unit_id },\n      { option_id: activationId + ':hold', tactical_intent: 'hold', label: 'Hold position and preserve readiness', execution_plan_id: 'plan-hold-' + actor.unit_id }\n    ];\n    if (enemy) options.unshift({ option_id: activationId + ':engage:' + enemy.unit_id, tactical_intent: 'next_best_target', label: 'Engage an offered visible target', execution_plan_id: 'plan-engage-' + actor.unit_id, target_id: enemy.unit_id });\n    return options;\n  }\n  function activationRequest(s, retryReason) {\n    var actor = s.roster[s.activationIndex];\n    if (!retryReason) {\n      s.activationSerial += 1;\n      s.currentActor = clone(actor);\n      s.currentActivationId = 'capacity-act-' + s.activationSerial + '-' + actor.unit_id;\n      s.currentOptions = makeOptions(s, actor, s.currentActivationId);\n      s.retryCount = 0;\n      s.phase = 'awaiting_selection';\n    }\n    return {\n      type: retryReason ? 'capacity_selection_retry' : 'capacity_activation_request',\n      battle_id: s.battleId,\n      activation_id: s.currentActivationId,\n      activation_number: s.activationIndex + 1,\n      activation_total: s.roster.length,\n      actor: clone(s.currentActor),\n      directive: s.currentActor.side === 'friendly' ? s.directive : null,\n      legal_options: clone(s.currentOptions),\n      retry_reason: retryReason || null,\n      concurrency_contract: { persistent_identity_count: s.roster.length, maximum_provider_requests_in_flight: 5, commit_mode: 'authoritative_initiative_order' },\n      instruction: 'Call select_tactical_option exactly once using this activation_id and one offered option_id. Do not invent mechanics or state.'\n    };\n  }\n  function fallbackOption(options, policy) {\n    var intent = { next_best_target: 'next_best_target', nearest_cover: 'nearest_cover', continue_objective: 'continue_objective', return_to_signal: 'nearest_cover', hold: 'hold' }[policy] || 'hold';\n    return options.filter(function (option) { return option.tactical_intent === intent; })[0] || options[0];\n  }\n\n  var s = state && typeof state === 'object' && !Array.isArray(state) ? clone(state) : {};\n  if (s.phase === 'complete') return { targetIds: [], drop: true, state: s };\n\n  if (!s.initialized) {\n    var config = input && typeof input === 'object' ? input : {};\n    if (typeof input === 'string') {\n      var friendlyMatch = input.match(/friendly\\s*=\\s*(\\d+)/i);\n      var oppositionMatch = input.match(/opposition\\s*=\\s*(\\d+)/i);\n      config = {\n        friendlyUnitCount: friendlyMatch ? Number(friendlyMatch[1]) : 2,\n        oppositionUnitCount: oppositionMatch ? Number(oppositionMatch[1]) : 2\n      };\n    }\n    var friendlyCount = boundedCount(config.friendlyUnitCount);\n    var oppositionCount = boundedCount(config.oppositionUnitCount);\n    s.initialized = true;\n    s.battleId = 'dc-capacity-' + String(context.runtime && context.runtime.invocationId || 'drill');\n    s.deployedCounts = { friendly: friendlyCount, opposition: oppositionCount };\n    s.roster = buildRoster(friendlyCount, oppositionCount);\n    s.directive = 'Protect the Commander, preserve signal, and contest the mission objective.';\n    s.activationIndex = 0;\n    s.activationSerial = 0;\n    s.committed = [];\n    s.phase = 'awaiting_commander';\n    var brief = commanderBrief(s);\n    brief.registry = registrySnapshot(s);\n    return { targetIds: ['dc-cap-commander', 'dc-cap-registry', 'dc-cap-live'], payload: brief, state: s };\n  }\n\n  if (s.phase === 'awaiting_commander') {\n    if (typeof input !== 'string' || !input.trim()) {\n      return { targetIds: ['dc-cap-commander'], payload: commanderBrief(s), state: s };\n    }\n    s.directive = input.trim();\n    return { targetIds: ['dc-cap-context-builder'], payload: activationRequest(s, null), state: s };\n  }\n\n  if (s.phase === 'awaiting_selection') {\n    var calls = input && input.type === 'agent_tool_call_envelope' && Array.isArray(input.toolCalls) ? input.toolCalls : [];\n    var call = calls.length === 1 ? calls[0] : null;\n    var args = call && call.arguments && typeof call.arguments === 'object' ? call.arguments : {};\n    var option = s.currentOptions.filter(function (item) { return item.option_id === args.option_id; })[0];\n    var valid = Boolean(call && call.name === 'select_tactical_option' && args.activation_id === s.currentActivationId && option);\n    if (!valid && s.retryCount < 1) {\n      s.retryCount += 1;\n      return { targetIds: ['dc-cap-context-builder'], payload: activationRequest(s, 'Selection was missing, stale, malformed, or not offered. Retry once.'), state: s };\n    }\n    var selected = valid ? option : fallbackOption(s.currentOptions, args.fallback_policy || 'hold');\n    var committed = {\n      type: 'capacity_activation_committed',\n      battle_id: s.battleId,\n      event_sequence: s.committed.length + 1,\n      activation_id: s.currentActivationId,\n      actor: clone(s.currentActor),\n      selected_option: clone(selected),\n      fallback_used: !valid,\n      diagnostic_reason: valid ? String(args.reason || '') : 'Deterministic fallback committed after one failed retry.',\n      production_note: 'This capacity drill commits an offered execution-plan ID. The production backend must revalidate and execute the full legal plan atomically.'\n    };\n    s.committed.push(clone(committed));\n    s.phase = 'awaiting_commit_fanout';\n    return { targetIds: ['dc-cap-post-commit'], payload: committed, state: s };\n  }\n\n  if (s.phase === 'awaiting_commit_fanout' && input && input.type === 'capacity_activation_committed') {\n    s.activationIndex += 1;\n    if (s.activationIndex >= s.roster.length) {\n      s.phase = 'complete';\n      return {\n        targetIds: ['dc-cap-post-commit'],\n        payload: {\n          type: 'CAPACITY_DRILL_COMPLETE',\n          battle_id: s.battleId,\n          deployed_counts: clone(s.deployedCounts),\n          active_identity_count: s.roster.length,\n          committed_activation_count: s.committed.length,\n          unique_agent_ids: s.committed.map(function (event) { return event.actor.agent_id; }),\n          maximum_provider_requests_in_flight: 5,\n          result: 'Every deployed identity completed exactly one governed activation.',\n          production_contract: 'Create identities dynamically from deployed units. Do not encode the twenty Synapse slots as fixed production workers.'\n        },\n        state: s\n      };\n    }\n    return { targetIds: ['dc-cap-context-builder'], payload: activationRequest(s, null), state: s };\n  }\n\n  return { targetIds: [], drop: true, state: s };\n}",
+          "generatedSummary": "Dynamic 4-20 identity registry and one-round serial capacity drill with strict selection validation and deterministic fallback.",
+          "generatedAt": "2026-08-01T00:00:00.000Z",
+          "generatedJobId": "codex-drone-commander-capacity-v1",
+          "generatedAssumptions": [
+            "Twenty canvas Agent slots visualize maximum capacity; production creates identities dynamically from deployed units.",
+            "One round is sufficient to prove every configured identity can activate within Synapse Flow event limits.",
+            "Serial execution is the correctness baseline; production prefetch is a later optimization capped at five requests."
+          ],
+          "generatedTests": [
+            {
+              "name": "minimum 2v2 creates four identities",
+              "activeIdentityCount": 4
+            },
+            {
+              "name": "uneven 3v7 creates ten identities",
+              "activeIdentityCount": 10
+            },
+            {
+              "name": "maximum 10v10 creates twenty identities",
+              "activeIdentityCount": 20
+            }
+          ],
+          "generatedVersions": [],
+          "rules": "",
+          "template": "{{input}}"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-commander",
+      "type": "synapseNode",
+      "position": {
+        "x": 650,
+        "y": 50
+      },
+      "data": {
+        "kind": "user",
+        "label": "Capacity Drill Commander",
+        "description": "Supplies one natural-language directive before the deployed identity set activates.",
+        "inputType": "capacity_drill_commander_brief",
+        "outputType": "message",
+        "config": {
+          "mode": "manual",
+          "systemPrompt": "Act as the human Drone Commander. Give one concise intent-level directive in prose. Do not output JSON, code, coordinates, dice, or mechanical outcomes.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 250
+        }
+      }
+    },
+    {
+      "id": "dc-cap-registry",
+      "type": "synapseNode",
+      "position": {
+        "x": 650,
+        "y": 220
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Dynamic Battle Agent Registry",
+        "description": "Displays the deployed 4-20 identity records and the explicit dynamic-production contract.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "replace",
+          "initialValue": "No deployment has been created."
+        }
+      }
+    },
+    {
+      "id": "dc-cap-directive",
+      "type": "synapseNode",
+      "position": {
+        "x": 650,
+        "y": 390
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Locked Capacity Directive",
+        "description": "Stores the exact Commander prose for inspectability; active friendly context also carries it directly.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "replace",
+          "initialValue": "Protect the Commander and continue the objective."
+        }
+      }
+    },
+    {
+      "id": "dc-cap-governor",
+      "type": "synapseNode",
+      "position": {
+        "x": 650,
+        "y": 560
+      },
+      "data": {
+        "kind": "governor",
+        "label": "Capacity Execution Governor",
+        "description": "Bounds every response and committed-event continuation and blocks the completion event.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "maxActivations": 50,
+          "stopPhrase": "CAPACITY_DRILL_COMPLETE"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-context-builder",
+      "type": "synapseNode",
+      "position": {
+        "x": 970,
+        "y": 360
+      },
+      "data": {
+        "kind": "logic",
+        "label": "Dynamic Context Builder",
+        "description": "Routes the trusted activation package to the one slot assigned to the active identity.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "operation": "generated",
+          "routerPrompt": "Accept only capacity_activation_request or capacity_selection_retry objects. Read actor.slot_node_id and route to exactly that connected slot. Reject any missing, unknown, or multiply matched slot. Preserve the payload. Canvas slots are capacity fixtures, not fixed production identities.",
+          "generatedCode": "function route(input, context, state) {\n  if (!input || (input.type !== 'capacity_activation_request' && input.type !== 'capacity_selection_retry')) {\n    return { targetIds: [], drop: true, state: state || {} };\n  }\n  var target = input.actor && input.actor.slot_node_id;\n  var allowed = context.targets.filter(function (edge) { return edge.node && edge.node.id === target; });\n  if (allowed.length !== 1) return { targetIds: [], drop: true, state: state || {} };\n  return { targetIds: [target], payload: input, state: state || {} };\n}",
+          "generatedSummary": "Exact dynamic identity-to-capacity-slot dispatcher.",
+          "generatedAt": "2026-08-01T00:00:00.000Z",
+          "generatedJobId": "codex-capacity-context-v1",
+          "generatedAssumptions": [
+            "The Orchestrator assigns only connected slot IDs from the validated deployment registry."
+          ],
+          "generatedTests": [
+            {
+              "name": "routes one active identity to one exact slot"
+            }
+          ],
+          "generatedVersions": [],
+          "rules": "",
+          "template": "{{input}}"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-friendly-01",
+      "type": "synapseNode",
+      "position": {
+        "x": 1280,
+        "y": 40
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Friendly Agent Slot 01",
+        "description": "Capacity-test execution slot 01 for one dynamically assigned friendly identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-friendly-02",
+      "type": "synapseNode",
+      "position": {
+        "x": 1280,
+        "y": 190
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Friendly Agent Slot 02",
+        "description": "Capacity-test execution slot 02 for one dynamically assigned friendly identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-friendly-03",
+      "type": "synapseNode",
+      "position": {
+        "x": 1280,
+        "y": 340
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Friendly Agent Slot 03",
+        "description": "Capacity-test execution slot 03 for one dynamically assigned friendly identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-friendly-04",
+      "type": "synapseNode",
+      "position": {
+        "x": 1280,
+        "y": 490
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Friendly Agent Slot 04",
+        "description": "Capacity-test execution slot 04 for one dynamically assigned friendly identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-friendly-05",
+      "type": "synapseNode",
+      "position": {
+        "x": 1280,
+        "y": 640
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Friendly Agent Slot 05",
+        "description": "Capacity-test execution slot 05 for one dynamically assigned friendly identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-friendly-06",
+      "type": "synapseNode",
+      "position": {
+        "x": 1280,
+        "y": 790
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Friendly Agent Slot 06",
+        "description": "Capacity-test execution slot 06 for one dynamically assigned friendly identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-friendly-07",
+      "type": "synapseNode",
+      "position": {
+        "x": 1280,
+        "y": 940
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Friendly Agent Slot 07",
+        "description": "Capacity-test execution slot 07 for one dynamically assigned friendly identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-friendly-08",
+      "type": "synapseNode",
+      "position": {
+        "x": 1280,
+        "y": 1090
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Friendly Agent Slot 08",
+        "description": "Capacity-test execution slot 08 for one dynamically assigned friendly identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-friendly-09",
+      "type": "synapseNode",
+      "position": {
+        "x": 1280,
+        "y": 1240
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Friendly Agent Slot 09",
+        "description": "Capacity-test execution slot 09 for one dynamically assigned friendly identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-friendly-10",
+      "type": "synapseNode",
+      "position": {
+        "x": 1280,
+        "y": 1390
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Friendly Agent Slot 10",
+        "description": "Capacity-test execution slot 10 for one dynamically assigned friendly identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-opposition-01",
+      "type": "synapseNode",
+      "position": {
+        "x": 1700,
+        "y": 40
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Opposition Agent Slot 01",
+        "description": "Capacity-test execution slot 01 for one dynamically assigned opposition identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-opposition-02",
+      "type": "synapseNode",
+      "position": {
+        "x": 1700,
+        "y": 190
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Opposition Agent Slot 02",
+        "description": "Capacity-test execution slot 02 for one dynamically assigned opposition identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-opposition-03",
+      "type": "synapseNode",
+      "position": {
+        "x": 1700,
+        "y": 340
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Opposition Agent Slot 03",
+        "description": "Capacity-test execution slot 03 for one dynamically assigned opposition identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-opposition-04",
+      "type": "synapseNode",
+      "position": {
+        "x": 1700,
+        "y": 490
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Opposition Agent Slot 04",
+        "description": "Capacity-test execution slot 04 for one dynamically assigned opposition identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-opposition-05",
+      "type": "synapseNode",
+      "position": {
+        "x": 1700,
+        "y": 640
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Opposition Agent Slot 05",
+        "description": "Capacity-test execution slot 05 for one dynamically assigned opposition identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-opposition-06",
+      "type": "synapseNode",
+      "position": {
+        "x": 1700,
+        "y": 790
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Opposition Agent Slot 06",
+        "description": "Capacity-test execution slot 06 for one dynamically assigned opposition identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-opposition-07",
+      "type": "synapseNode",
+      "position": {
+        "x": 1700,
+        "y": 940
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Opposition Agent Slot 07",
+        "description": "Capacity-test execution slot 07 for one dynamically assigned opposition identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-opposition-08",
+      "type": "synapseNode",
+      "position": {
+        "x": 1700,
+        "y": 1090
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Opposition Agent Slot 08",
+        "description": "Capacity-test execution slot 08 for one dynamically assigned opposition identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-opposition-09",
+      "type": "synapseNode",
+      "position": {
+        "x": 1700,
+        "y": 1240
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Opposition Agent Slot 09",
+        "description": "Capacity-test execution slot 09 for one dynamically assigned opposition identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-opposition-10",
+      "type": "synapseNode",
+      "position": {
+        "x": 1700,
+        "y": 1390
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Opposition Agent Slot 10",
+        "description": "Capacity-test execution slot 10 for one dynamically assigned opposition identity. This widget is not a fixed production Agent class.",
+        "inputType": "capacity_activation_request",
+        "outputType": "agent_tool_call_envelope",
+        "config": {
+          "systemPrompt": "ROLE\nYou execute one tactical decision for the persistent unit identity supplied in the incoming actor object. The identity, side, role, doctrine, and agent_id are dynamic battle data. Do not assume this canvas slot has a permanent unit persona.\n\nTASK\nChoose exactly one option from legal_options for the active identity. Friendly identities follow the quoted Commander directive when legal. Opposition identities follow their supplied doctrine.\n\nBOUNDARIES\n- Copy activation_id and one offered option_id exactly.\n- Never invent paths, coordinates, targets, dice, damage, state, identities, or tools.\n- Do not act for another slot or identity.\n- The Tool call is provisional until backend validation and commit.\n\nOUTPUT\nCall select_tactical_option exactly once with a short diagnostic reason. After acknowledgement, return a short sentence; downstream receives the structured Tool-call envelope.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 350,
+          "requireToolCall": true,
+          "outputMode": "tool_call"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-selection-tool",
+      "type": "synapseNode",
+      "position": {
+        "x": 2130,
+        "y": 360
+      },
+      "data": {
+        "kind": "tool",
+        "label": "Select Capacity Tactical Option",
+        "description": "Records one provisional opaque option selection; it does not resolve mechanics.",
+        "inputType": "tool_request",
+        "outputType": "tool_result",
+        "config": {
+          "mode": "mock",
+          "mockResponse": "{\"acceptedForValidation\":true,\"authoritative\":false}",
+          "behaviorPrompt": "",
+          "functionName": "select_tactical_option",
+          "functionDescription": "Select exactly one offered tactical option for the supplied dynamic unit identity. The backend must validate before commit.",
+          "parametersSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"activation_id\": {\n      \"type\": \"string\"\n    },\n    \"option_id\": {\n      \"type\": \"string\"\n    },\n    \"fallback_policy\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"next_best_target\",\n        \"nearest_cover\",\n        \"continue_objective\",\n        \"return_to_signal\",\n        \"hold\"\n      ]\n    },\n    \"reason\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"activation_id\",\n    \"option_id\",\n    \"fallback_policy\",\n    \"reason\"\n  ],\n  \"additionalProperties\": false\n}"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-post-commit",
+      "type": "synapseNode",
+      "position": {
+        "x": 2400,
+        "y": 360
+      },
+      "data": {
+        "kind": "logic",
+        "label": "Capacity Post-Commit Bus",
+        "description": "Records committed events, samples the radio path once, and returns through the Governor before the next identity.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "operation": "generated",
+          "routerPrompt": "Accept capacity_activation_committed or CAPACITY_DRILL_COMPLETE. Always preserve and route to dc-cap-ledger and dc-cap-governor. To keep a 10v10 drill below the 200-event safety limit while proving the branch, route only the first committed friendly event (event_sequence 1) to dc-cap-radio. Production creates radio independently after every eligible friendly commit. Completion also routes to dc-cap-final. Never alter mechanics.",
+          "generatedCode": "function route(input, context, state) {\n  if (!input || (input.type !== 'capacity_activation_committed' && input.type !== 'CAPACITY_DRILL_COMPLETE')) {\n    return { targetIds: [], drop: true, state: state || {} };\n  }\n  var targets = ['dc-cap-ledger', 'dc-cap-governor'];\n  if (input.type === 'capacity_activation_committed' && input.event_sequence === 1 && input.actor && input.actor.side === 'friendly') targets.push('dc-cap-radio');\n  if (input.type === 'CAPACITY_DRILL_COMPLETE') targets.push('dc-cap-final');\n  return { targetIds: targets, payload: input, state: state || {} };\n}",
+          "generatedSummary": "Bounded post-commit projection and continuation bus.",
+          "generatedAt": "2026-08-01T00:00:00.000Z",
+          "generatedJobId": "codex-capacity-post-v1",
+          "generatedAssumptions": [
+            "Opposition actions are represented by system events in the ledger and do not generate radio.",
+            "The capacity drill samples friendly radio once; the production harness composes it after every eligible friendly commit without blocking mechanics."
+          ],
+          "generatedTests": [
+            {
+              "name": "friendly gets radio"
+            },
+            {
+              "name": "completion reaches final and Governor"
+            }
+          ],
+          "generatedVersions": [],
+          "rules": "",
+          "template": "{{input}}"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-radio",
+      "type": "synapseNode",
+      "position": {
+        "x": 2700,
+        "y": 80
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Capacity Friendly Radio Sample",
+        "description": "Proves the separate post-commit radio branch once without consuming full-capacity event headroom.",
+        "inputType": "capacity_activation_committed",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "Write one friendly post-resolution radio sentence under 20 words using only the committed event. No JSON, hidden information, or invented outcome.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 100,
+          "requireToolCall": false,
+          "outputMode": "text"
+        }
+      }
+    },
+    {
+      "id": "dc-cap-communications",
+      "type": "synapseNode",
+      "position": {
+        "x": 3000,
+        "y": 80
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Capacity Communications",
+        "description": "Stores friendly radio without feeding it into tactical authority.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": "Capacity drill communications opened."
+        }
+      }
+    },
+    {
+      "id": "dc-cap-ledger",
+      "type": "synapseNode",
+      "position": {
+        "x": 2700,
+        "y": 360
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Capacity Commit Ledger",
+        "description": "Stores each authoritative committed activation and the completion event.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": "No capacity activations committed."
+        }
+      }
+    },
+    {
+      "id": "dc-cap-live",
+      "type": "synapseNode",
+      "position": {
+        "x": 970,
+        "y": 90
+      },
+      "data": {
+        "kind": "output",
+        "label": "Capacity Configuration",
+        "description": "Displays the configured deployment and dynamic registry at drill start.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {}
+      }
+    },
+    {
+      "id": "dc-cap-final",
+      "type": "synapseNode",
+      "position": {
+        "x": 3000,
+        "y": 360
+      },
+      "data": {
+        "kind": "output",
+        "label": "4-20 Agent Capacity Result",
+        "description": "Displays configured counts, unique identities, and exact committed activation count.",
+        "inputType": "CAPACITY_DRILL_COMPLETE",
+        "outputType": "none",
+        "config": {}
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "dc-cap-edge-start-engine",
+      "source": "dc-cap-start",
+      "target": "dc-cap-engine",
+      "type": "smoothstep",
+      "label": "trigger",
+      "data": {
+        "channel": "trigger"
+      }
+    },
+    {
+      "id": "dc-cap-edge-engine-commander",
+      "source": "dc-cap-engine",
+      "target": "dc-cap-commander",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-engine-registry",
+      "source": "dc-cap-engine",
+      "target": "dc-cap-registry",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      }
+    },
+    {
+      "id": "dc-cap-edge-engine-live",
+      "source": "dc-cap-engine",
+      "target": "dc-cap-live",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-commander-directive",
+      "source": "dc-cap-commander",
+      "target": "dc-cap-directive",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      }
+    },
+    {
+      "id": "dc-cap-edge-commander-governor",
+      "source": "dc-cap-commander",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-governor-engine",
+      "source": "dc-cap-governor",
+      "target": "dc-cap-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-engine-context",
+      "source": "dc-cap-engine",
+      "target": "dc-cap-context-builder",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-friendly-01",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-friendly-01",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-friendly-02",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-friendly-02",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-friendly-03",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-friendly-03",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-friendly-04",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-friendly-04",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-friendly-05",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-friendly-05",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-friendly-06",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-friendly-06",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-friendly-07",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-friendly-07",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-friendly-08",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-friendly-08",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-friendly-09",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-friendly-09",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-friendly-10",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-friendly-10",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-opposition-01",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-opposition-01",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-opposition-02",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-opposition-02",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-opposition-03",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-opposition-03",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-opposition-04",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-opposition-04",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-opposition-05",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-opposition-05",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-opposition-06",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-opposition-06",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-opposition-07",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-opposition-07",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-opposition-08",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-opposition-08",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-opposition-09",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-opposition-09",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-context-dc-cap-opposition-10",
+      "source": "dc-cap-context-builder",
+      "target": "dc-cap-opposition-10",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-01-governor",
+      "source": "dc-cap-friendly-01",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-02-governor",
+      "source": "dc-cap-friendly-02",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-03-governor",
+      "source": "dc-cap-friendly-03",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-04-governor",
+      "source": "dc-cap-friendly-04",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-05-governor",
+      "source": "dc-cap-friendly-05",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-06-governor",
+      "source": "dc-cap-friendly-06",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-07-governor",
+      "source": "dc-cap-friendly-07",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-08-governor",
+      "source": "dc-cap-friendly-08",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-09-governor",
+      "source": "dc-cap-friendly-09",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-10-governor",
+      "source": "dc-cap-friendly-10",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-01-governor",
+      "source": "dc-cap-opposition-01",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-02-governor",
+      "source": "dc-cap-opposition-02",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-03-governor",
+      "source": "dc-cap-opposition-03",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-04-governor",
+      "source": "dc-cap-opposition-04",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-05-governor",
+      "source": "dc-cap-opposition-05",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-06-governor",
+      "source": "dc-cap-opposition-06",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-07-governor",
+      "source": "dc-cap-opposition-07",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-08-governor",
+      "source": "dc-cap-opposition-08",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-09-governor",
+      "source": "dc-cap-opposition-09",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-10-governor",
+      "source": "dc-cap-opposition-10",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-01-tool",
+      "source": "dc-cap-friendly-01",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-02-tool",
+      "source": "dc-cap-friendly-02",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-03-tool",
+      "source": "dc-cap-friendly-03",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-04-tool",
+      "source": "dc-cap-friendly-04",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-05-tool",
+      "source": "dc-cap-friendly-05",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-06-tool",
+      "source": "dc-cap-friendly-06",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-07-tool",
+      "source": "dc-cap-friendly-07",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-08-tool",
+      "source": "dc-cap-friendly-08",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-09-tool",
+      "source": "dc-cap-friendly-09",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-friendly-10-tool",
+      "source": "dc-cap-friendly-10",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-01-tool",
+      "source": "dc-cap-opposition-01",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-02-tool",
+      "source": "dc-cap-opposition-02",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-03-tool",
+      "source": "dc-cap-opposition-03",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-04-tool",
+      "source": "dc-cap-opposition-04",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-05-tool",
+      "source": "dc-cap-opposition-05",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-06-tool",
+      "source": "dc-cap-opposition-06",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-07-tool",
+      "source": "dc-cap-opposition-07",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-08-tool",
+      "source": "dc-cap-opposition-08",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-09-tool",
+      "source": "dc-cap-opposition-09",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-dc-cap-opposition-10-tool",
+      "source": "dc-cap-opposition-10",
+      "target": "dc-cap-selection-tool",
+      "type": "smoothstep",
+      "label": "tool",
+      "data": {
+        "channel": "tool"
+      }
+    },
+    {
+      "id": "dc-cap-edge-engine-post",
+      "source": "dc-cap-engine",
+      "target": "dc-cap-post-commit",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-post-ledger",
+      "source": "dc-cap-post-commit",
+      "target": "dc-cap-ledger",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      }
+    },
+    {
+      "id": "dc-cap-edge-post-governor",
+      "source": "dc-cap-post-commit",
+      "target": "dc-cap-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-post-radio",
+      "source": "dc-cap-post-commit",
+      "target": "dc-cap-radio",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-post-final",
+      "source": "dc-cap-post-commit",
+      "target": "dc-cap-final",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      }
+    },
+    {
+      "id": "dc-cap-edge-radio-communications",
+      "source": "dc-cap-radio",
+      "target": "dc-cap-communications",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      }
+    }
+  ]
+}

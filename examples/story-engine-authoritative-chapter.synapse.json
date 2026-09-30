@@ -1,0 +1,723 @@
+{
+  "format": "synapse-flow/harness",
+  "version": 2,
+  "name": "Story Engine - Authoritative Agent Chapter",
+  "nodes": [
+    {
+      "id": "story-start",
+      "type": "synapseNode",
+      "position": {
+        "x": 70,
+        "y": 310
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Begin Chapter",
+        "description": "Locks the scenario and begins one authoritative story-engine chapter.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "payload": {
+            "type": "LOCK_CHAPTER",
+            "setting": "A stormbound mountain watchtower above the frontier settlement of Moosehearth.",
+            "chapter": "The Broken Watchtower",
+            "objective": "Hold the signal tower long enough to light its warning beacon.",
+            "party": [
+              {
+                "name": "Jannet",
+                "persona": "Leader",
+                "className": "Fighter"
+              },
+              {
+                "name": "Annie",
+                "persona": "Hero",
+                "className": "Paladin"
+              },
+              {
+                "name": "Beau",
+                "persona": "Rebel",
+                "className": "Rogue"
+              },
+              {
+                "name": "Joe",
+                "persona": "Protector",
+                "className": "Cleric"
+              }
+            ],
+            "threat": "Two frost raiders breach the tower stair.",
+            "authority": "The human is GM. The Game Engine owns rolls, HP, legal actions, and chronology."
+          },
+          "continueState": false
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    },
+    {
+      "id": "story-world-lock",
+      "type": "synapseNode",
+      "position": {
+        "x": 370,
+        "y": 310
+      },
+      "data": {
+        "kind": "agent",
+        "label": "World Lock Agent",
+        "description": "Creates compact immutable chapter canon before play.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are the Story Engine World and Chapter Lock Agent.\nConvert the supplied chapter setup into compact durable canon for later agents.\nInclude the setting, objective, selected party identities and classes, known\nthreat, and the human GM's authority. Add no facts. Return concise prose only.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "story-engine",
+      "type": "synapseNode",
+      "position": {
+        "x": 760,
+        "y": 305
+      },
+      "data": {
+        "kind": "logic",
+        "label": "Authoritative Game Engine",
+        "description": "Owns turns, legal actions, validation, rolls, HP, retries, chapter boundaries, and narrative handoff.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "operation": "generated",
+          "routerPrompt": "Reproduce the Story Engine agent harness boundary. Accept a world-lock summary, then run Jannet, Annie, Beau, Joe, and Opposition in strict initiative order. Agents may choose only legal structured actions. This Router alone resolves deterministic mechanics, validates actor and turn tokens, retries malformed output twice, records event chronology, requests a durable summary after each full round, and sends the complete record to Narrative after victory, defeat, or three rounds.",
+          "generatedCode": "function route(input, context, state) {\n  const ids = {\n    jannet: \"story-player-jannet\",\n    annie: \"story-player-annie\",\n    beau: \"story-player-beau\",\n    joe: \"story-player-joe\",\n    opposition: \"story-opposition\",\n    summary: \"story-summary\",\n    narrative: \"story-narrative\",\n    memory: \"story-structured-memory\",\n    archive: \"story-run-archive\"\n  };\n  const order = [\"Jannet\", \"Annie\", \"Beau\", \"Joe\", \"Opposition\"];\n  const agentIds = {\n    Jannet: ids.jannet,\n    Annie: ids.annie,\n    Beau: ids.beau,\n    Joe: ids.joe,\n    Opposition: ids.opposition\n  };\n  const s = state && typeof state === \"object\" && !Array.isArray(state)\n    ? JSON.parse(JSON.stringify(state))\n    : {};\n\n  const clone = value => JSON.parse(JSON.stringify(value));\n  const aliveEnemies = () => s.enemies.filter(enemy => enemy.hp > 0);\n  const alivePlayers = () => Object.entries(s.party)\n    .filter(([, player]) => player.hp > 0)\n    .map(([name]) => name);\n  const token = actor => {\n    s.tokenCounter += 1;\n    return \"story:\" + String(s.round) + \":\" + actor + \":\" +\n      String(s.tokenCounter) + \":\" + String(context.runtime.invocationId);\n  };\n  const appendEvent = event => {\n    s.events.push({ sequence: s.events.length + 1, round: s.round, ...event });\n    s.events = s.events.slice(-120);\n  };\n  const publicState = () => ({\n    chapter: s.chapter,\n    objective: s.objective,\n    round: s.round,\n    maxRounds: s.maxRounds,\n    party: Object.fromEntries(\n      Object.entries(s.party).map(([name, player]) => [\n        name,\n        {\n          className: player.className,\n          hp: player.hp,\n          maxHp: player.maxHp,\n          defending: Boolean(player.defending)\n        }\n      ])\n    ),\n    enemies: s.enemies.map(enemy => ({\n      id: enemy.id,\n      name: enemy.name,\n      hp: enemy.hp,\n      maxHp: enemy.maxHp\n    })),\n    recentEvents: s.events.slice(-10),\n    durableSummaries: s.summaries.slice()\n  });\n  const parseObject = value => {\n    if (value && typeof value === \"object\" && !Array.isArray(value)) return { value };\n    if (typeof value !== \"string\") return { error: \"Response must contain one JSON object.\" };\n    let start = -1;\n    let depth = 0;\n    let quoted = false;\n    let escaped = false;\n    for (let index = 0; index < value.length; index += 1) {\n      const character = value[index];\n      if (start < 0) {\n        if (character === \"{\") {\n          start = index;\n          depth = 1;\n        }\n        continue;\n      }\n      if (quoted) {\n        if (escaped) escaped = false;\n        else if (character === \"\\\\\") escaped = true;\n        else if (character === \"\\\"\") quoted = false;\n      } else if (character === \"\\\"\") {\n        quoted = true;\n      } else if (character === \"{\") {\n        depth += 1;\n      } else if (character === \"}\") {\n        depth -= 1;\n        if (depth === 0) {\n          try {\n            return { value: JSON.parse(value.slice(start, index + 1)) };\n          } catch {\n            return { error: \"The first complete JSON object is malformed.\" };\n          }\n        }\n      }\n    }\n    return { error: \"No complete JSON object was found.\" };\n  };\n  const random = () => {\n    s.seed = (Math.imul(1664525, s.seed) + 1013904223) >>> 0;\n    return s.seed / 4294967296;\n  };\n  const d20 = () => 1 + Math.floor(random() * 20);\n  const d8 = () => 1 + Math.floor(random() * 8);\n  const d6 = () => 1 + Math.floor(random() * 6);\n  const currentActor = () => order[s.turnIndex];\n  const nextLivingTurn = () => {\n    let checked = 0;\n    while (checked < order.length) {\n      const actor = currentActor();\n      if (actor === \"Opposition\") {\n        if (aliveEnemies().length) return actor;\n      } else if (s.party[actor].hp > 0) {\n        return actor;\n      }\n      s.turnIndex += 1;\n      if (s.turnIndex >= order.length) {\n        s.turnIndex = 0;\n        s.round += 1;\n      }\n      checked += 1;\n    }\n    return null;\n  };\n  const playerActions = actor => {\n    const actions = aliveEnemies().map(enemy => ({\n      action: \"ATTACK\",\n      target: enemy.id,\n      label: \"Attack \" + enemy.name\n    }));\n    if (actor === \"Joe\") {\n      for (const [name, player] of Object.entries(s.party)) {\n        if (player.hp > 0 && player.hp < player.maxHp) {\n          actions.push({ action: \"HEAL\", target: name, label: \"Heal \" + name });\n        }\n      }\n    }\n    actions.push({ action: \"DEFEND\", target: actor, label: \"Defend\" });\n    return actions;\n  };\n  const actorPayload = actor => {\n    s.expectedActor = actor;\n    s.turnToken = token(actor);\n    if (actor === \"Opposition\") {\n      return {\n        type: \"opposition_turn\",\n        actor,\n        turnToken: s.turnToken,\n        monsterActors: aliveEnemies().map(enemy => ({\n          id: enemy.id,\n          name: enemy.name,\n          hp: enemy.hp\n        })),\n        legalTargets: alivePlayers(),\n        publicState: publicState(),\n        instruction:\n          \"Choose one living monster and one living player target. Return strict JSON only.\"\n      };\n    }\n    return {\n      type: \"player_turn\",\n      actor,\n      identity: clone(s.party[actor]),\n      turnToken: s.turnToken,\n      legalActions: playerActions(actor),\n      publicState: publicState(),\n      instruction:\n        \"Choose exactly one listed action and target. The engine resolves all mechanics. Return strict JSON only.\"\n    };\n  };\n  const retryPayload = error => {\n    s.retryCount += 1;\n    const actor = s.expectedActor;\n    if (s.retryCount > 2) {\n      return null;\n    }\n    const payload = actorPayload(actor);\n    payload.type = \"retry\";\n    payload.error = error;\n    return payload;\n  };\n  const resolvePlayer = decision => {\n    const actor = s.expectedActor;\n    const legal = playerActions(actor).some(option =>\n      option.action === decision.action && option.target === decision.target\n    );\n    if (!legal) return { error: \"action and target must match one legalActions entry.\" };\n    const player = s.party[actor];\n    if (decision.action === \"DEFEND\") {\n      player.defending = true;\n      const event = {\n        type: \"defend\",\n        actor,\n        result: actor + \" takes a defensive stance.\"\n      };\n      appendEvent(event);\n      return { event };\n    }\n    if (decision.action === \"HEAL\") {\n      const target = s.party[decision.target];\n      if (!target || target.hp <= 0 || target.hp >= target.maxHp) {\n        return { error: \"HEAL target must be one injured living party member.\" };\n      }\n      const roll = d8() + 3;\n      const amount = Math.min(roll, target.maxHp - target.hp);\n      target.hp += amount;\n      const event = {\n        type: \"heal\",\n        actor,\n        target: decision.target,\n        roll,\n        amount,\n        result: actor + \" restores \" + String(amount) + \" HP to \" + decision.target + \".\"\n      };\n      appendEvent(event);\n      return { event };\n    }\n    const enemy = s.enemies.find(item => item.id === decision.target && item.hp > 0);\n    if (!enemy) return { error: \"ATTACK target must be one living enemy id.\" };\n    const attackRoll = d20();\n    const total = attackRoll + player.attackBonus;\n    const hit = attackRoll === 20 || (attackRoll !== 1 && total >= enemy.ac);\n    const damage = hit ? d8() + player.damageBonus : 0;\n    enemy.hp = Math.max(0, enemy.hp - damage);\n    const event = {\n      type: \"attack\",\n      actor,\n      target: enemy.id,\n      attackRoll,\n      total,\n      hit,\n      damage,\n      result: hit\n        ? actor + \" hits \" + enemy.name + \" for \" + String(damage) + \" damage.\"\n        : actor + \" misses \" + enemy.name + \".\"\n    };\n    appendEvent(event);\n    return { event };\n  };\n  const resolveOpposition = decision => {\n    const enemy = s.enemies.find(item => item.id === decision.monsterId && item.hp > 0);\n    const target = s.party[decision.target];\n    if (!enemy) return { error: \"monsterId must identify one living monsterActors entry.\" };\n    if (!target || target.hp <= 0) return { error: \"target must identify one living player.\" };\n    const attackRoll = d20();\n    const total = attackRoll + enemy.attackBonus;\n    const hit = attackRoll === 20 || (attackRoll !== 1 && total >= target.ac);\n    let damage = hit ? d6() + enemy.damageBonus : 0;\n    if (hit && target.defending) damage = Math.max(1, Math.floor(damage / 2));\n    target.hp = Math.max(0, target.hp - damage);\n    const event = {\n      type: \"opposition_attack\",\n      actor: enemy.name,\n      target: decision.target,\n      attackRoll,\n      total,\n      hit,\n      damage,\n      result: hit\n        ? enemy.name + \" hits \" + decision.target + \" for \" + String(damage) + \" damage.\"\n        : enemy.name + \" misses \" + decision.target + \".\"\n    };\n    appendEvent(event);\n    return { event };\n  };\n  const chapterEnded = () =>\n    aliveEnemies().length === 0 ||\n    alivePlayers().length === 0 ||\n    s.round > s.maxRounds;\n  const ending = () => {\n    if (aliveEnemies().length === 0) return \"party_victory\";\n    if (alivePlayers().length === 0) return \"party_defeat\";\n    return \"chapter_boundary\";\n  };\n  const finish = () => {\n    s.phase = \"awaiting_narrative\";\n    s.ending = ending();\n    const payload = {\n      type: \"build_narrative\",\n      ending: s.ending,\n      chapter: s.chapter,\n      objective: s.objective,\n      worldLock: s.worldLock,\n      finalState: publicState(),\n      completeEvents: s.events.slice(),\n      durableSummaries: s.summaries.slice(),\n      instruction:\n        \"Write a polished third-person past-tense chapter. Preserve every mechanical result and chronology. Return prose only.\"\n    };\n    return {\n      targetIds: [ids.archive, ids.narrative],\n      payload,\n      state: s\n    };\n  };\n  const beginOrContinueTurn = lastEvent => {\n    if (chapterEnded()) return finish();\n    const actor = nextLivingTurn();\n    if (!actor) return finish();\n    s.phase = \"awaiting_action\";\n    s.retryCount = 0;\n    if (actor !== \"Opposition\") s.party[actor].defending = false;\n    const payload = actorPayload(actor);\n    payload.lastResolvedEvent = lastEvent || null;\n    return {\n      targetIds: [agentIds[actor]],\n      payload,\n      state: s\n    };\n  };\n\n  if (!s.initialized) {\n    s.initialized = true;\n    s.phase = \"world_locked\";\n    s.chapter = \"The Broken Watchtower\";\n    s.objective =\n      \"Hold the mountain signal tower long enough to light its warning beacon.\";\n    s.maxRounds = 3;\n    s.round = 1;\n    s.turnIndex = 0;\n    s.tokenCounter = 0;\n    s.turnToken = \"\";\n    s.expectedActor = \"\";\n    s.retryCount = 0;\n    s.seed = Math.floor(Number(context.runtime.randomValue) * 4294967296) >>> 0;\n    s.worldLock = String(input || \"\").trim();\n    s.summaries = [];\n    s.events = [];\n    s.party = {\n      Jannet: {\n        persona: \"Leader\",\n        className: \"Fighter\",\n        hp: 24,\n        maxHp: 24,\n        ac: 16,\n        attackBonus: 5,\n        damageBonus: 3,\n        defending: false\n      },\n      Annie: {\n        persona: \"Hero\",\n        className: \"Paladin\",\n        hp: 22,\n        maxHp: 22,\n        ac: 17,\n        attackBonus: 5,\n        damageBonus: 3,\n        defending: false\n      },\n      Beau: {\n        persona: \"Rebel\",\n        className: \"Rogue\",\n        hp: 18,\n        maxHp: 18,\n        ac: 15,\n        attackBonus: 6,\n        damageBonus: 4,\n        defending: false\n      },\n      Joe: {\n        persona: \"Protector\",\n        className: \"Cleric\",\n        hp: 21,\n        maxHp: 21,\n        ac: 16,\n        attackBonus: 4,\n        damageBonus: 2,\n        defending: false\n      }\n    };\n    s.enemies = [\n      { id: \"raider-1\", name: \"Frost Raider One\", hp: 18, maxHp: 18, ac: 13, attackBonus: 4, damageBonus: 2 },\n      { id: \"raider-2\", name: \"Frost Raider Two\", hp: 18, maxHp: 18, ac: 13, attackBonus: 4, damageBonus: 2 }\n    ];\n    appendEvent({\n      type: \"chapter_started\",\n      result: s.chapter + \" begins. \" + s.objective\n    });\n    return beginOrContinueTurn(s.events[s.events.length - 1]);\n  }\n\n  if (s.phase === \"awaiting_summary\") {\n    const summary = String(input || \"\").trim();\n    s.summaries.push({\n      throughRound: s.round - 1,\n      summary: summary || \"No durable summary was produced.\"\n    });\n    s.summaries = s.summaries.slice(-8);\n    return beginOrContinueTurn({\n      type: \"summary_recorded\",\n      throughRound: s.round - 1\n    });\n  }\n  if (s.phase !== \"awaiting_action\") return { drop: true, state: s };\n\n  const parsed = parseObject(input);\n  if (parsed.error) {\n    const retry = retryPayload(parsed.error);\n    if (retry) return { targetIds: [agentIds[s.expectedActor]], payload: retry, state: s };\n    appendEvent({\n      type: \"invalid_response_fallback\",\n      actor: s.expectedActor,\n      result: s.expectedActor + \" loses the turn after repeated invalid responses.\"\n    });\n  } else {\n    const decision = parsed.value;\n    let error = \"\";\n    if (decision.actor !== s.expectedActor) error = \"actor must exactly match the current actor.\";\n    else if (decision.turnToken !== s.turnToken) error = \"turnToken is stale or incorrect.\";\n    let resolved = null;\n    if (!error) {\n      resolved = s.expectedActor === \"Opposition\"\n        ? resolveOpposition(decision)\n        : resolvePlayer(decision);\n      error = resolved.error || \"\";\n    }\n    if (error) {\n      const retry = retryPayload(error);\n      if (retry) return { targetIds: [agentIds[s.expectedActor]], payload: retry, state: s };\n      appendEvent({\n        type: \"invalid_response_fallback\",\n        actor: s.expectedActor,\n        result: s.expectedActor + \" loses the turn after repeated invalid responses.\"\n      });\n    }\n  }\n\n  s.turnIndex += 1;\n  if (s.turnIndex >= order.length) {\n    s.turnIndex = 0;\n    s.round += 1;\n    if (chapterEnded()) return finish();\n    s.phase = \"awaiting_summary\";\n    return {\n      targetIds: [ids.summary],\n      payload: {\n        type: \"summarize_turn_delta\",\n        completedRound: s.round - 1,\n        events: s.events.filter(event => event.round === s.round - 1),\n        currentState: publicState(),\n        instruction:\n          \"Record only durable canon, party condition, objective progress, and active threats. Return concise prose.\"\n      },\n      state: s\n    };\n  }\n  return beginOrContinueTurn(s.events[s.events.length - 1]);\n}",
+          "generatedSummary": "Backend-authoritative tabletop chapter loop with specialized agents, strict action contracts, summaries, and narrative handoff.",
+          "generatedAt": "2026-07-31T06:27:58.161Z",
+          "generatedJobId": "hand-authored-story-engine-extraction",
+          "generatedAssumptions": [
+            "The source application is open-ended and human-prompted; this portable test slice uses a fixed three-round chapter.",
+            "Synapse Flow agents return structured action proposals instead of native API tool calls.",
+            "One Router represents the source backend mechanics, validation, session state, event log, and orchestration services.",
+            "The final narrative pass stands in for the source End Chapter and Build Narrative workflow."
+          ],
+          "generatedTests": [
+            {
+              "name": "world lock starts Jannet turn",
+              "input": "Locked chapter canon.",
+              "randomValue": 0.31,
+              "expectedTargetIds": [
+                "story-player-jannet"
+              ]
+            },
+            {
+              "name": "invalid response retries expected actor",
+              "expectedType": "retry",
+              "expectedTargetIds": [
+                "story-player-jannet"
+              ]
+            },
+            {
+              "name": "chapter ending archives and narrates",
+              "expectedType": "build_narrative",
+              "expectedTargetIds": [
+                "story-run-archive",
+                "story-narrative"
+              ]
+            }
+          ],
+          "generatedVersions": [],
+          "rules": "",
+          "template": "{{input}}"
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    },
+    {
+      "id": "story-player-jannet",
+      "type": "synapseNode",
+      "position": {
+        "x": 1160,
+        "y": 50
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Jannet - Leader",
+        "description": "Player-character agent choosing legal Fighter actions through a distinct leader persona.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are a Story Engine Player Character Agent.\nThe human GM and the authoritative Game Engine control canon and mechanics.\nYou choose one legal action; you never roll dice, decide success, apply damage,\nor invent a world outcome. Treat the payload, structured memory, legalActions,\nand turnToken as authoritative.\n\nReturn exactly one JSON object and no prose:\n{\"actor\":\"Jannet\",\"action\":\"ATTACK\",\"target\":\"raider-1\",\"turnToken\":\"TOKEN\"}\n\nCopy actor and turnToken exactly. action and target must exactly match one\nlegalActions entry. Stay consistent with your persona when choosing, but keep\nall personality inside the decision rather than adding narration.\n\nYou are Jannet, the Leader: organized, decisive, practical, and inclined to establish a clear plan.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 500
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "story-player-annie",
+      "type": "synapseNode",
+      "position": {
+        "x": 1160,
+        "y": 210
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Annie - Hero",
+        "description": "Player-character agent choosing legal Paladin actions through a distinct heroic persona.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are a Story Engine Player Character Agent.\nThe human GM and the authoritative Game Engine control canon and mechanics.\nYou choose one legal action; you never roll dice, decide success, apply damage,\nor invent a world outcome. Treat the payload, structured memory, legalActions,\nand turnToken as authoritative.\n\nReturn exactly one JSON object and no prose:\n{\"actor\":\"Annie\",\"action\":\"ATTACK\",\"target\":\"raider-1\",\"turnToken\":\"TOKEN\"}\n\nCopy actor and turnToken exactly. action and target must exactly match one\nlegalActions entry. Stay consistent with your persona when choosing, but keep\nall personality inside the decision rather than adding narration.\n\nYou are Annie, the Hero: theatrical, brave, committed, and drawn toward bold actions that protect party morale.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 500
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "story-player-beau",
+      "type": "synapseNode",
+      "position": {
+        "x": 1160,
+        "y": 370
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Beau - Rebel",
+        "description": "Player-character agent choosing legal Rogue actions through a distinct skeptical persona.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are a Story Engine Player Character Agent.\nThe human GM and the authoritative Game Engine control canon and mechanics.\nYou choose one legal action; you never roll dice, decide success, apply damage,\nor invent a world outcome. Treat the payload, structured memory, legalActions,\nand turnToken as authoritative.\n\nReturn exactly one JSON object and no prose:\n{\"actor\":\"Beau\",\"action\":\"ATTACK\",\"target\":\"raider-1\",\"turnToken\":\"TOKEN\"}\n\nCopy actor and turnToken exactly. action and target must exactly match one\nlegalActions entry. Stay consistent with your persona when choosing, but keep\nall personality inside the decision rather than adding narration.\n\nYou are Beau, the Rebel: skeptical, observant, unconventional, and alert to hidden angles and weak points.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 500
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "story-player-joe",
+      "type": "synapseNode",
+      "position": {
+        "x": 1160,
+        "y": 530
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Joe - Protector",
+        "description": "Player-character agent choosing legal Cleric actions with context-sensitive healing.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are a Story Engine Player Character Agent.\nThe human GM and the authoritative Game Engine control canon and mechanics.\nYou choose one legal action; you never roll dice, decide success, apply damage,\nor invent a world outcome. Treat the payload, structured memory, legalActions,\nand turnToken as authoritative.\n\nReturn exactly one JSON object and no prose:\n{\"actor\":\"Joe\",\"action\":\"ATTACK\",\"target\":\"raider-1\",\"turnToken\":\"TOKEN\"}\n\nCopy actor and turnToken exactly. action and target must exactly match one\nlegalActions entry. Stay consistent with your persona when choosing, but keep\nall personality inside the decision rather than adding narration.\n\nYou are Joe, the Protector: humane, steady, defensive, and attentive to injured or vulnerable allies.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 500
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "story-opposition",
+      "type": "synapseNode",
+      "position": {
+        "x": 1160,
+        "y": 690
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Opposition Agent",
+        "description": "Chooses a legal monster actor and party target while the engine owns results.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are the Story Engine Opposition Agent.\nChoose one living monster and one legal living party target from the exact\npayload. The Game Engine resolves the attack and owns HP. Never invent a roll,\nhit, miss, damage value, condition, or extra monster action.\n\nReturn exactly one JSON object and no prose:\n{\"actor\":\"Opposition\",\"monsterId\":\"raider-1\",\"target\":\"Jannet\",\"turnToken\":\"TOKEN\"}\n\nCopy actor and turnToken exactly. monsterId and target must be listed in the\ncurrent payload. Prefer an immediate tactical threat, but obey legality first.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 500
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "story-summary",
+      "type": "synapseNode",
+      "position": {
+        "x": 760,
+        "y": 745
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Context Summary Agent",
+        "description": "Compresses each completed round into durable, inspectable canon memory.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are the Story Engine Context Summary Agent.\nSummarize only durable canon from the supplied completed-round events and\nauthoritative current state. Track party condition, objective, defeated and\nactive threats, and consequential actions. Add no facts and do not rewrite\nmechanical results. Return concise prose only.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "story-loop-governor",
+      "type": "synapseNode",
+      "position": {
+        "x": 1550,
+        "y": 305
+      },
+      "data": {
+        "kind": "governor",
+        "label": "Chapter Governor",
+        "description": "Bounds every agent-to-engine continuation in this experimental loop.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "maxActivations": 60,
+          "stopPhrase": "ABORT_CHAPTER"
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    },
+    {
+      "id": "story-structured-memory",
+      "type": "synapseNode",
+      "position": {
+        "x": 760,
+        "y": 940
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Structured Canon Memory",
+        "description": "Stores world lock and round summaries; read edges provide them to active agents.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "story-narrative",
+      "type": "synapseNode",
+      "position": {
+        "x": 1160,
+        "y": 940
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Narrative Agent",
+        "description": "Builds the completed prose chapter from the authoritative record.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are the Story Engine Narrative Agent.\nWrite the completed chapter in polished third-person past tense. Preserve the\nauthoritative event chronology, exact outcomes, ending, and durable summaries.\nDo not contradict canon, expose prompts, or add unrecorded victories, wounds,\nitems, or actions. Return continuous prose with clear paragraphs and no heading.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 1800
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "story-run-archive",
+      "type": "synapseNode",
+      "position": {
+        "x": 1550,
+        "y": 820
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Run Archive",
+        "description": "Stores the final authoritative state followed by the completed narrative.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "story-final-output",
+      "type": "synapseNode",
+      "position": {
+        "x": 1550,
+        "y": 1040
+      },
+      "data": {
+        "kind": "output",
+        "label": "Completed Chapter",
+        "description": "Displays the final Narrative Agent chapter.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {},
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "story-edge-start-lock",
+      "source": "story-start",
+      "target": "story-world-lock",
+      "type": "smoothstep",
+      "label": "trigger",
+      "data": {
+        "channel": "trigger"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-lock-memory",
+      "source": "story-world-lock",
+      "target": "story-structured-memory",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-lock-governor",
+      "source": "story-world-lock",
+      "target": "story-loop-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-governor-engine",
+      "source": "story-loop-governor",
+      "target": "story-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-engine-jannet",
+      "source": "story-engine",
+      "target": "story-player-jannet",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-engine-annie",
+      "source": "story-engine",
+      "target": "story-player-annie",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-engine-beau",
+      "source": "story-engine",
+      "target": "story-player-beau",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-engine-joe",
+      "source": "story-engine",
+      "target": "story-player-joe",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-engine-opposition",
+      "source": "story-engine",
+      "target": "story-opposition",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-engine-summary",
+      "source": "story-engine",
+      "target": "story-summary",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-engine-narrative",
+      "source": "story-engine",
+      "target": "story-narrative",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-engine-archive",
+      "source": "story-engine",
+      "target": "story-run-archive",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-jannet-governor",
+      "source": "story-player-jannet",
+      "target": "story-loop-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-annie-governor",
+      "source": "story-player-annie",
+      "target": "story-loop-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-beau-governor",
+      "source": "story-player-beau",
+      "target": "story-loop-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-joe-governor",
+      "source": "story-player-joe",
+      "target": "story-loop-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-opposition-governor",
+      "source": "story-opposition",
+      "target": "story-loop-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-summary-memory",
+      "source": "story-summary",
+      "target": "story-structured-memory",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-summary-governor",
+      "source": "story-summary",
+      "target": "story-loop-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-memory-jannet",
+      "source": "story-structured-memory",
+      "target": "story-player-jannet",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-memory-annie",
+      "source": "story-structured-memory",
+      "target": "story-player-annie",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-memory-beau",
+      "source": "story-structured-memory",
+      "target": "story-player-beau",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-memory-joe",
+      "source": "story-structured-memory",
+      "target": "story-player-joe",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-memory-opposition",
+      "source": "story-structured-memory",
+      "target": "story-opposition",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-memory-narrative",
+      "source": "story-structured-memory",
+      "target": "story-narrative",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-narrative-archive",
+      "source": "story-narrative",
+      "target": "story-run-archive",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "story-edge-narrative-output",
+      "source": "story-narrative",
+      "target": "story-final-output",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    }
+  ]
+}

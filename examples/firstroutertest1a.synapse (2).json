@@ -1,0 +1,475 @@
+{
+  "version": 1,
+  "name": "FirstRouterTest1A",
+  "nodes": [
+    {
+      "id": "fdc3dfcc-93f6-4912-9275-e3f4a8529da5",
+      "type": "synapseNode",
+      "position": {
+        "x": -392.2221003447903,
+        "y": 297.88751230351596
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Trigger",
+        "description": "Starts a run with a defined event.",
+        "inputType": "none",
+        "outputType": "event",
+        "config": {
+          "payload": "Begin the prototype run."
+        },
+        "status": "idle",
+        "lastOutput": "",
+        "activity": "",
+        "memoryEntries": [],
+        "outputHistory": []
+      },
+      "measured": {
+        "width": 202,
+        "height": 74
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "787ff5e0-4b58-4ebd-94d7-7662cebf83b6",
+      "type": "synapseNode",
+      "position": {
+        "x": 433.28743116306305,
+        "y": 298.7979051153564
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Luna Agent",
+        "description": "Uses an LLM to reason over its event and allowed context.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You generate one random word and then send it. ",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700
+        },
+        "status": "idle",
+        "lastOutput": "",
+        "activity": "",
+        "memoryEntries": [],
+        "outputHistory": []
+      },
+      "measured": {
+        "width": 202,
+        "height": 74
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "2a6053d5-6fa2-4dba-9551-f508477f9017",
+      "type": "synapseNode",
+      "position": {
+        "x": 477.0232063818412,
+        "y": 141.75070564430106
+      },
+      "data": {
+        "kind": "logic",
+        "label": "Router",
+        "description": "Routes or transforms events with deterministic rules.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "operation": "generated",
+          "rules": "urgent => Review Output\n* => Archive Output",
+          "template": "{{input}}",
+          "routerPrompt": "You will receive a short prompt from Luna Agent,  You must roll 1d4 dice roll to rout the output from the Luna Aagent to Agent 2, Agent 3, or Agent 4.  If you roll a 2 route to agent two, if you roll a three route to agent 3 if you roll a 4 route to agent for, if you roll a 1 then reroll, to the point that you get a 2 a 2 or a 4, and then route the output from Luna agent to the rolled agent. ",
+          "generatedCode": "function route(input, context, state) {\n  const agentByRoll = {\n    2: \"8a95db38-f093-46d8-9e3c-23e3279c9cc2\",\n    3: \"df9d2956-54e5-440e-8d8f-4801c42c06c0\",\n    4: \"d506ef52-766f-414c-a535-5ee34bedbc4f\"\n  };\n  const text = JSON.stringify(input);\n  let seed = state && Number.isInteger(state.seed) ? state.seed >>> 0 : 0;\n\n  for (let index = 0; index < text.length; index += 1) {\n    seed = (seed + text.charCodeAt(index)) >>> 0;\n  }\n\n  let roll = (seed % 4) + 1;\n  let rolls = 1;\n\n  if (roll === 1) {\n    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;\n    roll = (seed % 4) + 1;\n    rolls += 1;\n  }\n\n  return {\n    targetIds: [agentByRoll[roll]],\n    state: {\n      seed: seed,\n      totalRolls: ((state && Number.isInteger(state.totalRolls)) ? state.totalRolls : 0) + rolls,\n      lastRoll: roll\n    }\n  };\n}",
+          "generatedSummary": "Deterministically simulates 1d4, rerolls a 1, and routes the unchanged payload to Agent 2, 3, or 4.",
+          "generatedAt": "2026-07-29T03:02:49.844Z",
+          "generatedJobId": "8eb5a2ae-6964-470d-9096-73e07adbd9e8"
+        },
+        "status": "idle",
+        "lastOutput": "",
+        "activity": "",
+        "memoryEntries": [],
+        "outputHistory": []
+      },
+      "measured": {
+        "width": 202,
+        "height": 74
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "8a95db38-f093-46d8-9e3c-23e3279c9cc2",
+      "type": "synapseNode",
+      "position": {
+        "x": 46.05371897372831,
+        "y": 604.3561353291309
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Luna Agent 2",
+        "description": "Uses an LLM to reason over its event and allowed context.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You will receive a random word and make a rime from it. ",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700
+        },
+        "status": "idle",
+        "lastOutput": "",
+        "activity": "",
+        "memoryEntries": [],
+        "outputHistory": []
+      },
+      "measured": {
+        "width": 202,
+        "height": 74
+      },
+      "selected": false
+    },
+    {
+      "id": "df9d2956-54e5-440e-8d8f-4801c42c06c0",
+      "type": "synapseNode",
+      "position": {
+        "x": 523.3201278018514,
+        "y": 603.5374965489798
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Luna Agent 3",
+        "description": "Uses an LLM to reason over its event and allowed context.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You will receive a random word and make one song about it. ",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700
+        },
+        "status": "idle",
+        "lastOutput": "",
+        "activity": "",
+        "memoryEntries": [],
+        "outputHistory": []
+      },
+      "measured": {
+        "width": 202,
+        "height": 74
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "d506ef52-766f-414c-a535-5ee34bedbc4f",
+      "type": "synapseNode",
+      "position": {
+        "x": 937.5513505583357,
+        "y": 603.5374965489798
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Luna Agent 4",
+        "description": "Uses an LLM to reason over its event and allowed context.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "you will receive a random word and must make a riddle about it. ",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700
+        },
+        "status": "idle",
+        "lastOutput": "",
+        "activity": "",
+        "memoryEntries": [],
+        "outputHistory": []
+      },
+      "measured": {
+        "width": 202,
+        "height": 74
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "a234923d-e1b1-48e6-8a55-8119ee40aca6",
+      "type": "synapseNode",
+      "position": {
+        "x": 524.4424003131755,
+        "y": 821.7626181174916
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Memory",
+        "description": "Stores isolated state through explicit read and write edges.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "lastOutput": "",
+        "activity": "",
+        "memoryEntries": [],
+        "outputHistory": []
+      },
+      "measured": {
+        "width": 202,
+        "height": 74
+      },
+      "selected": true,
+      "dragging": false
+    },
+    {
+      "id": "6d66d953-4cc2-4b95-83aa-3fa67f01d354",
+      "type": "synapseNode",
+      "position": {
+        "x": 900.8970889964654,
+        "y": 820.028837147208
+      },
+      "data": {
+        "kind": "output",
+        "label": "Output",
+        "description": "Captures the final event for inspection.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {},
+        "status": "idle",
+        "lastOutput": "",
+        "activity": "",
+        "memoryEntries": [],
+        "outputHistory": []
+      },
+      "measured": {
+        "width": 202,
+        "height": 74
+      },
+      "selected": false,
+      "dragging": false
+    }
+  ],
+  "edges": [
+    {
+      "source": "a234923d-e1b1-48e6-8a55-8119ee40aca6",
+      "target": "6d66d953-4cc2-4b95-83aa-3fa67f01d354",
+      "id": "6d852d46-15d0-44de-acba-c36c4c77fff3",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false
+    },
+    {
+      "source": "d506ef52-766f-414c-a535-5ee34bedbc4f",
+      "target": "a234923d-e1b1-48e6-8a55-8119ee40aca6",
+      "id": "717071a7-2717-4475-9285-104b94cf4a9e",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      },
+      "animated": false
+    },
+    {
+      "source": "df9d2956-54e5-440e-8d8f-4801c42c06c0",
+      "target": "a234923d-e1b1-48e6-8a55-8119ee40aca6",
+      "id": "9b2dea91-c152-47a3-9da1-66a8aa771624",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "source": "8a95db38-f093-46d8-9e3c-23e3279c9cc2",
+      "target": "a234923d-e1b1-48e6-8a55-8119ee40aca6",
+      "id": "c41b8592-26f2-4323-8ab5-b2d706d025ff",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "source": "2a6053d5-6fa2-4dba-9551-f508477f9017",
+      "target": "d506ef52-766f-414c-a535-5ee34bedbc4f",
+      "id": "7bc4fc0f-031f-490a-8b83-8e6167c41a9f",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false
+    },
+    {
+      "source": "2a6053d5-6fa2-4dba-9551-f508477f9017",
+      "target": "df9d2956-54e5-440e-8d8f-4801c42c06c0",
+      "id": "371ec321-e103-4e10-ade3-b83abdfe72da",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "source": "2a6053d5-6fa2-4dba-9551-f508477f9017",
+      "target": "8a95db38-f093-46d8-9e3c-23e3279c9cc2",
+      "id": "1e241a4d-606d-420b-a4b2-db4ea65e31d1",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "source": "787ff5e0-4b58-4ebd-94d7-7662cebf83b6",
+      "target": "2a6053d5-6fa2-4dba-9551-f508477f9017",
+      "id": "e3c956e1-018f-4740-b033-5d6612ff79ed",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false
+    },
+    {
+      "source": "fdc3dfcc-93f6-4912-9275-e3f4a8529da5",
+      "target": "787ff5e0-4b58-4ebd-94d7-7662cebf83b6",
+      "id": "0a7a2c29-1454-4a02-8784-a38c58780581",
+      "type": "smoothstep",
+      "label": "trigger",
+      "data": {
+        "channel": "trigger"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#e6b84a"
+      },
+      "style": {
+        "stroke": "#e6b84a",
+        "strokeWidth": 2
+      },
+      "animated": false
+    },
+    {
+      "source": "8a95db38-f093-46d8-9e3c-23e3279c9cc2",
+      "target": "787ff5e0-4b58-4ebd-94d7-7662cebf83b6",
+      "id": "abb713a1-ba34-4a13-ac30-0b948702d75a",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "source": "df9d2956-54e5-440e-8d8f-4801c42c06c0",
+      "target": "787ff5e0-4b58-4ebd-94d7-7662cebf83b6",
+      "id": "c13dac27-31eb-4f0d-b795-4a37bb7f47aa",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "source": "d506ef52-766f-414c-a535-5ee34bedbc4f",
+      "target": "787ff5e0-4b58-4ebd-94d7-7662cebf83b6",
+      "id": "2baa4ace-8182-4757-8064-db5a2b45cb6c",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false
+    }
+  ]
+}

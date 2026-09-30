@@ -1,0 +1,111 @@
+{
+  "format": "synapse-flow/harness",
+  "version": 2,
+  "name": "API Search - Live Web Demo",
+  "nodes": [
+    {
+      "id": "search-demo-start",
+      "type": "synapseNode",
+      "position": {
+        "x": 80,
+        "y": 250
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Ask Current Question",
+        "description": "Starts one live web research turn.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "payload": "Find one recent positive development in robotics, explain it briefly, and include the most useful source URL.",
+          "continueState": false
+        }
+      }
+    },
+    {
+      "id": "search-demo-researcher",
+      "type": "synapseNode",
+      "position": {
+        "x": 390,
+        "y": 250
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Current Events Researcher",
+        "description": "Uses the connected API Search capability before answering.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "Answer the incoming research question concisely. Use the connected search capability and ground the answer in its returned evidence.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700,
+          "requireToolCall": true,
+          "outputMode": "text"
+        }
+      }
+    },
+    {
+      "id": "search-demo-web",
+      "type": "synapseNode",
+      "position": {
+        "x": 390,
+        "y": 500
+      },
+      "data": {
+        "kind": "search",
+        "label": "Live Web Search",
+        "description": "Searches the live internet and returns cited evidence to the calling Agent.",
+        "inputType": "tool_request",
+        "outputType": "tool_result",
+        "config": {
+          "provider": "web",
+          "searchMode": "assisted",
+          "functionName": "search_current_web",
+          "functionDescription": "Search the live web for current factual information needed to answer the incoming question.",
+          "usageInstructions": "Use a focused query, compare the returned evidence, and preserve the most useful source URL in the final answer.",
+          "maxResults": 5,
+          "searchContextSize": "low",
+          "allowedDomains": "",
+          "blockedDomains": "",
+          "customEndpoint": "https://api.example.com/search?q={{query}}&limit={{limit}}"
+        }
+      }
+    },
+    {
+      "id": "search-demo-output",
+      "type": "synapseNode",
+      "position": {
+        "x": 740,
+        "y": 250
+      },
+      "data": {
+        "kind": "output",
+        "label": "Research Answer",
+        "description": "Captures the cited final answer.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {}
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "search-demo-start-agent",
+      "source": "search-demo-start",
+      "target": "search-demo-researcher",
+      "channel": "trigger"
+    },
+    {
+      "id": "search-demo-agent-search",
+      "source": "search-demo-researcher",
+      "target": "search-demo-web",
+      "channel": "tool"
+    },
+    {
+      "id": "search-demo-agent-output",
+      "source": "search-demo-researcher",
+      "target": "search-demo-output",
+      "channel": "data"
+    }
+  ]
+}

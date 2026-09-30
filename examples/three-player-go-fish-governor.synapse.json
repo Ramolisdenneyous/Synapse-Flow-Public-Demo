@@ -1,0 +1,352 @@
+{
+  "format": "synapse-flow/harness",
+  "version": 2,
+  "name": "Three Player Go Fish - Governor Test",
+  "nodes": [
+    {
+      "id": "go-fish-start",
+      "type": "synapseNode",
+      "position": {
+        "x": 80,
+        "y": 310
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Start Go Fish",
+        "description": "Starts one fresh three-player Go Fish game.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "payload": "START_GO_FISH",
+          "continueState": false
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    },
+    {
+      "id": "go-fish-engine",
+      "type": "synapseNode",
+      "position": {
+        "x": 390,
+        "y": 300
+      },
+      "data": {
+        "kind": "logic",
+        "label": "Game Engine",
+        "description": "Owns the deck, hands, books, legal asks, turns, draws, and victory.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "operation": "generated",
+          "routerPrompt": "Run standard three-player Go Fish. Deal seven cards each from one shuffled 52-card deck. Agents choose only a legal target and a rank they hold. End immediately when the first player completes four books and emit GAME_OVER through the Governor.",
+          "generatedCode": "function route(input, context, state) {\n  const ids = {\n    playerOne: \"go-fish-player-one\",\n    playerTwo: \"go-fish-player-two\",\n    playerThree: \"go-fish-player-three\",\n    governor: \"go-fish-governor\",\n    archive: \"go-fish-game-archive\",\n    display: \"go-fish-table-display\"\n  };\n  const players = [\"Player One\", \"Player Two\", \"Player Three\"];\n  const agentIds = {\n    \"Player One\": ids.playerOne,\n    \"Player Two\": ids.playerTwo,\n    \"Player Three\": ids.playerThree\n  };\n  const rankOrder = [\"A\", \"2\", \"3\", \"4\", \"5\", \"6\", \"7\", \"8\", \"9\", \"10\", \"J\", \"Q\", \"K\"];\n  const suitOrder = [\"S\", \"H\", \"D\", \"C\"];\n  const s = state && typeof state === \"object\" && !Array.isArray(state)\n    ? JSON.parse(JSON.stringify(state))\n    : {};\n\n  const rankOf = card => String(card).slice(0, -1);\n  const sortCards = cards => cards.slice().sort((left, right) => {\n    const rankDifference = rankOrder.indexOf(rankOf(left)) - rankOrder.indexOf(rankOf(right));\n    if (rankDifference) return rankDifference;\n    return suitOrder.indexOf(left.slice(-1)) - suitOrder.indexOf(right.slice(-1));\n  });\n  const publicBooks = () => Object.fromEntries(\n    players.map(player => [player, (s.books[player] || []).map(book => book.rank)])\n  );\n  const publicTable = () => ({\n    game: \"Go Fish\",\n    turnNumber: s.turnNumber,\n    currentPlayer: players[s.currentPlayerIndex],\n    deckCount: s.deck.length,\n    handCounts: Object.fromEntries(players.map(player => [player, s.hands[player].length])),\n    books: publicBooks(),\n    bookCounts: Object.fromEntries(players.map(player => [player, s.books[player].length])),\n    recentHistory: s.history.slice(-18)\n  });\n  const addHistory = event => {\n    s.history.push({ sequence: s.history.length + 1, ...event });\n    s.history = s.history.slice(-100);\n  };\n  const collectBooks = player => {\n    const collected = [];\n    for (const rank of rankOrder) {\n      const matching = s.hands[player].filter(card => rankOf(card) === rank);\n      if (matching.length !== 4) continue;\n      s.hands[player] = s.hands[player].filter(card => rankOf(card) !== rank);\n      s.books[player].push({ rank, cards: sortCards(matching) });\n      collected.push(rank);\n      addHistory({\n        type: \"book_completed\",\n        player,\n        rank,\n        bookNumber: s.books[player].length\n      });\n    }\n    s.hands[player] = sortCards(s.hands[player]);\n    return collected;\n  };\n  const winner = () => players.find(player => s.books[player].length >= 4) || null;\n  const makeTurnToken = player => {\n    s.turnNumber += 1;\n    s.turnToken =\n      \"go-fish:\" +\n      String(s.turnNumber) +\n      \":\" +\n      player +\n      \":\" +\n      String(context.runtime.invocationId);\n  };\n  const playerPayload = (player, type, lastEvent) => {\n    const opponents = players.filter(candidate => candidate !== player);\n    return {\n      type,\n      game: \"Go Fish\",\n      player,\n      hand: sortCards(s.hands[player]),\n      books: s.books[player].map(book => book.rank),\n      legalTargets: opponents,\n      legalRanks: [...new Set(s.hands[player].map(rankOf))],\n      turnToken: s.turnToken,\n      publicTable: publicTable(),\n      lastEvent,\n      instruction:\n        \"Return one strict JSON object with player, target, rank, and turnToken. \" +\n        \"Target must be one legal opponent. Rank must exactly match one legalRanks value.\"\n    };\n  };\n  const finishGame = (player, lastEvent) => {\n    s.phase = \"complete\";\n    s.winner = player;\n    const payload = {\n      type: \"GAME_OVER\",\n      signal: \"GAME_OVER\",\n      game: \"Go Fish\",\n      winner: player,\n      winningBookCount: s.books[player].length,\n      hands: Object.fromEntries(players.map(name => [name, sortCards(s.hands[name])])),\n      books: Object.fromEntries(\n        players.map(name => [\n          name,\n          s.books[name].map(book => ({ rank: book.rank, cards: book.cards.slice() }))\n        ])\n      ),\n      deck: s.deck.slice(),\n      publicTable: publicTable(),\n      completeHistory: s.history.slice(),\n      lastEvent,\n      message:\n        player +\n        \" completed four books. GAME_OVER is routed through the Governor, which blocks continuation.\"\n    };\n    return {\n      targetIds: [ids.archive, ids.governor, ids.display],\n      payload,\n      state: s\n    };\n  };\n  const activatePlayer = lastEvent => {\n    let skipped = 0;\n    while (skipped < players.length) {\n      const player = players[s.currentPlayerIndex];\n      if (s.hands[player].length === 0 && s.deck.length) {\n        const card = s.deck.pop();\n        s.hands[player].push(card);\n        collectBooks(player);\n        addHistory({ type: \"empty_hand_draw\", player });\n      }\n      const gameWinner = winner();\n      if (gameWinner) return finishGame(gameWinner, lastEvent);\n      if (s.hands[player].length) {\n        s.phase = \"awaiting_ask\";\n        makeTurnToken(player);\n        return {\n          targetIds: [agentIds[player]],\n          payload: playerPayload(player, \"player_turn\", lastEvent),\n          state: s\n        };\n      }\n      s.currentPlayerIndex = (s.currentPlayerIndex + 1) % players.length;\n      skipped += 1;\n    }\n    const leader = players.slice().sort(\n      (left, right) => s.books[right].length - s.books[left].length\n    )[0];\n    return finishGame(leader, {\n      type: \"no_playable_cards\",\n      message: \"No player could make another legal ask.\"\n    });\n  };\n  const parseDecision = value => {\n    if (value && typeof value === \"object\" && !Array.isArray(value)) return { value };\n    if (typeof value !== \"string\") return { error: \"Decision must be a JSON object.\" };\n    let start = -1;\n    let depth = 0;\n    let quoted = false;\n    let escaped = false;\n    for (let index = 0; index < value.length; index += 1) {\n      const character = value[index];\n      if (start < 0) {\n        if (character === \"{\") {\n          start = index;\n          depth = 1;\n        }\n        continue;\n      }\n      if (quoted) {\n        if (escaped) escaped = false;\n        else if (character === \"\\\\\") escaped = true;\n        else if (character === \"\\\"\") quoted = false;\n      } else if (character === \"\\\"\") {\n        quoted = true;\n      } else if (character === \"{\") {\n        depth += 1;\n      } else if (character === \"}\") {\n        depth -= 1;\n        if (depth === 0) {\n          try {\n            return { value: JSON.parse(value.slice(start, index + 1)) };\n          } catch {\n            return { error: \"The first complete JSON object is malformed.\" };\n          }\n        }\n      }\n    }\n    return { error: \"No complete JSON object was found.\" };\n  };\n\n  if (!s.initialized) {\n    if (String(input).trim().toUpperCase() !== \"START_GO_FISH\") {\n      return { drop: true, state: s };\n    }\n    const deck = [];\n    for (const suit of suitOrder) {\n      for (const rank of rankOrder) deck.push(rank + suit);\n    }\n    let seed = Math.floor(Number(context.runtime.randomValue) * 4294967296) >>> 0;\n    const random = () => {\n      seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;\n      return seed / 4294967296;\n    };\n    for (let index = deck.length - 1; index > 0; index -= 1) {\n      const choice = Math.floor(random() * (index + 1));\n      const held = deck[index];\n      deck[index] = deck[choice];\n      deck[choice] = held;\n    }\n    s.initialized = true;\n    s.phase = \"dealing\";\n    s.deck = deck;\n    s.hands = { \"Player One\": [], \"Player Two\": [], \"Player Three\": [] };\n    s.books = { \"Player One\": [], \"Player Two\": [], \"Player Three\": [] };\n    s.history = [];\n    s.turnNumber = 0;\n    s.turnToken = null;\n    s.currentPlayerIndex = 0;\n    s.winner = null;\n    for (let pass = 0; pass < 7; pass += 1) {\n      for (const player of players) s.hands[player].push(s.deck.pop());\n    }\n    for (const player of players) {\n      s.hands[player] = sortCards(s.hands[player]);\n      collectBooks(player);\n    }\n    addHistory({\n      type: \"game_started\",\n      players: players.slice(),\n      cardsPerPlayer: 7,\n      deckCount: s.deck.length\n    });\n    const gameWinner = winner();\n    return gameWinner\n      ? finishGame(gameWinner, { type: \"initial_books\" })\n      : activatePlayer({ type: \"game_started\" });\n  }\n\n  if (s.phase === \"complete\") return { drop: true, state: s };\n  const currentPlayer = players[s.currentPlayerIndex];\n  const parsed = parseDecision(input);\n  const retry = error => ({\n    targetIds: [agentIds[currentPlayer]],\n    payload: playerPayload(currentPlayer, \"retry\", {\n      type: \"invalid_ask\",\n      error\n    }),\n    state: s\n  });\n  if (parsed.error) return retry(parsed.error);\n  const decision = parsed.value;\n  if (decision.player !== currentPlayer) {\n    return retry(\"Expected player identity \" + currentPlayer + \".\");\n  }\n  if (decision.turnToken !== s.turnToken) {\n    return retry(\"The turnToken is stale or incorrect.\");\n  }\n  if (!players.includes(decision.target) || decision.target === currentPlayer) {\n    return retry(\"Target must be one of the two opposing players.\");\n  }\n  if (!rankOrder.includes(decision.rank)) {\n    return retry(\"Rank must be A, 2-10, J, Q, or K.\");\n  }\n  if (!s.hands[currentPlayer].some(card => rankOf(card) === decision.rank)) {\n    return retry(\"A player may ask only for a rank currently held in that hand.\");\n  }\n\n  const matchingCards = s.hands[decision.target].filter(\n    card => rankOf(card) === decision.rank\n  );\n  let lastEvent;\n  let continueTurn = false;\n  if (matchingCards.length) {\n    s.hands[decision.target] = s.hands[decision.target].filter(\n      card => rankOf(card) !== decision.rank\n    );\n    s.hands[currentPlayer].push(...matchingCards);\n    s.hands[currentPlayer] = sortCards(s.hands[currentPlayer]);\n    const collected = collectBooks(currentPlayer);\n    lastEvent = {\n      type: \"ask_succeeded\",\n      player: currentPlayer,\n      target: decision.target,\n      rank: decision.rank,\n      transferred: matchingCards.length,\n      booksCompleted: collected\n    };\n    addHistory(lastEvent);\n    continueTurn = true;\n  } else {\n    const drawnCard = s.deck.length ? s.deck.pop() : null;\n    const drewRequestedRank = Boolean(drawnCard && rankOf(drawnCard) === decision.rank);\n    if (drawnCard) {\n      s.hands[currentPlayer].push(drawnCard);\n      s.hands[currentPlayer] = sortCards(s.hands[currentPlayer]);\n    }\n    const collected = collectBooks(currentPlayer);\n    lastEvent = {\n      type: \"go_fish\",\n      player: currentPlayer,\n      target: decision.target,\n      rank: decision.rank,\n      drewCard: Boolean(drawnCard),\n      drewRequestedRank,\n      booksCompleted: collected\n    };\n    addHistory(lastEvent);\n    continueTurn = drewRequestedRank;\n  }\n\n  const gameWinner = winner();\n  if (gameWinner) return finishGame(gameWinner, lastEvent);\n  if (!continueTurn) {\n    s.currentPlayerIndex = (s.currentPlayerIndex + 1) % players.length;\n  }\n  return activatePlayer(lastEvent);\n}",
+          "generatedSummary": "Authoritative three-player Go Fish engine with strict asks, private hands, books, and first-to-four victory.",
+          "generatedAt": "2026-07-31T05:44:27.641Z",
+          "generatedJobId": "hand-authored-go-fish-engine",
+          "generatedAssumptions": [
+            "Three-player Go Fish deals seven cards to each player.",
+            "A successful ask or drawing the requested rank grants another turn.",
+            "A book is four cards of the same rank and is removed from the hand."
+          ],
+          "generatedTests": [
+            {
+              "name": "fresh game activates Player One",
+              "input": "START_GO_FISH",
+              "randomValue": 0.37,
+              "expectedTargetIds": [
+                "go-fish-player-one"
+              ]
+            },
+            {
+              "name": "fourth book emits Governor stop signal",
+              "expectedType": "GAME_OVER",
+              "expectedTargetIds": [
+                "go-fish-game-archive",
+                "go-fish-governor",
+                "go-fish-table-display"
+              ]
+            }
+          ],
+          "generatedVersions": [],
+          "rules": "",
+          "template": "{{input}}"
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    },
+    {
+      "id": "go-fish-player-one",
+      "type": "synapseNode",
+      "position": {
+        "x": 735,
+        "y": 90
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Player One",
+        "description": "Chooses which opponent to ask and which held rank to request.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are one of three players in a standard game of Go Fish.\nThe authoritative Game Engine gives you your exact private hand, completed books,\nlegal targets, legal ranks, public table information, and a turnToken.\n\nChoose one opponent and one rank from legalRanks. You may ask only for a rank\nthat appears in your hand. Use public history and book counts strategically.\n\nReturn exactly one JSON object and no prose:\n{\"player\":\"Player One\",\"target\":\"Player Two\",\"rank\":\"7\",\"turnToken\":\"TOKEN_FROM_INPUT\"}\n\nCopy player and turnToken exactly. target must be one legalTargets value. rank\nmust be one exact legalRanks value.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 400
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "go-fish-player-two",
+      "type": "synapseNode",
+      "position": {
+        "x": 735,
+        "y": 300
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Player Two",
+        "description": "Chooses which opponent to ask and which held rank to request.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are one of three players in a standard game of Go Fish.\nThe authoritative Game Engine gives you your exact private hand, completed books,\nlegal targets, legal ranks, public table information, and a turnToken.\n\nChoose one opponent and one rank from legalRanks. You may ask only for a rank\nthat appears in your hand. Use public history and book counts strategically.\n\nReturn exactly one JSON object and no prose:\n{\"player\":\"Player Two\",\"target\":\"Player Two\",\"rank\":\"7\",\"turnToken\":\"TOKEN_FROM_INPUT\"}\n\nCopy player and turnToken exactly. target must be one legalTargets value. rank\nmust be one exact legalRanks value.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 400
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "go-fish-player-three",
+      "type": "synapseNode",
+      "position": {
+        "x": 735,
+        "y": 510
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Player Three",
+        "description": "Chooses which opponent to ask and which held rank to request.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are one of three players in a standard game of Go Fish.\nThe authoritative Game Engine gives you your exact private hand, completed books,\nlegal targets, legal ranks, public table information, and a turnToken.\n\nChoose one opponent and one rank from legalRanks. You may ask only for a rank\nthat appears in your hand. Use public history and book counts strategically.\n\nReturn exactly one JSON object and no prose:\n{\"player\":\"Player Three\",\"target\":\"Player Two\",\"rank\":\"7\",\"turnToken\":\"TOKEN_FROM_INPUT\"}\n\nCopy player and turnToken exactly. target must be one legalTargets value. rank\nmust be one exact legalRanks value.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 400
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": []
+      }
+    },
+    {
+      "id": "go-fish-governor",
+      "type": "synapseNode",
+      "position": {
+        "x": 1080,
+        "y": 300
+      },
+      "data": {
+        "kind": "governor",
+        "label": "Game Governor",
+        "description": "Passes player asks to the Game Engine and blocks the GAME_OVER continuation.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "maxActivations": 10000,
+          "stopPhrase": "GAME_OVER"
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    },
+    {
+      "id": "go-fish-game-archive",
+      "type": "synapseNode",
+      "position": {
+        "x": 1080,
+        "y": 535
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Completed Game Archive",
+        "description": "Stores the complete final game state and history.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "go-fish-table-display",
+      "type": "synapseNode",
+      "position": {
+        "x": 1390,
+        "y": 300
+      },
+      "data": {
+        "kind": "output",
+        "label": "Final Table",
+        "description": "Captures the winner, books, remaining hands, deck, and complete history.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {},
+        "status": "idle",
+        "activity": "",
+        "lastOutput": ""
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "go-fish-edge-start-engine",
+      "source": "go-fish-start",
+      "target": "go-fish-engine",
+      "type": "smoothstep",
+      "label": "trigger",
+      "data": {
+        "channel": "trigger"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "go-fish-edge-engine-one",
+      "source": "go-fish-engine",
+      "target": "go-fish-player-one",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "go-fish-edge-engine-two",
+      "source": "go-fish-engine",
+      "target": "go-fish-player-two",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "go-fish-edge-engine-three",
+      "source": "go-fish-engine",
+      "target": "go-fish-player-three",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "go-fish-edge-one-governor",
+      "source": "go-fish-player-one",
+      "target": "go-fish-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "go-fish-edge-two-governor",
+      "source": "go-fish-player-two",
+      "target": "go-fish-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "go-fish-edge-three-governor",
+      "source": "go-fish-player-three",
+      "target": "go-fish-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "go-fish-edge-engine-governor",
+      "source": "go-fish-engine",
+      "target": "go-fish-governor",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "go-fish-edge-governor-engine",
+      "source": "go-fish-governor",
+      "target": "go-fish-engine",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "go-fish-edge-engine-archive",
+      "source": "go-fish-engine",
+      "target": "go-fish-game-archive",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "go-fish-edge-engine-display",
+      "source": "go-fish-engine",
+      "target": "go-fish-table-display",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "animated": false,
+      "selected": false
+    }
+  ]
+}

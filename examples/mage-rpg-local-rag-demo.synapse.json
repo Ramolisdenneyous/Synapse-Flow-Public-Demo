@@ -1,0 +1,104 @@
+{
+  "format": "synapse-flow/harness",
+  "version": 2,
+  "name": "Mage RPG - Local RAG Demo",
+  "nodes": [
+    {
+      "id": "mage-rag-trigger",
+      "type": "synapseNode",
+      "position": { "x": 80, "y": 250 },
+      "data": {
+        "kind": "trigger",
+        "label": "Ask Rules Question",
+        "description": "Starts one grounded Mage rules question.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "payload": "What Sphere ranks and rules are required for a mage to teleport themselves or someone else?",
+          "continueState": false
+        }
+      }
+    },
+    {
+      "id": "mage-rag-agent",
+      "type": "synapseNode",
+      "position": { "x": 390, "y": 250 },
+      "data": {
+        "kind": "agent",
+        "label": "Mage Rules Researcher",
+        "description": "Answers only from the connected local Mage rules corpus.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "Answer the incoming Mage rules question using the connected Local RAG capability. Compare the retrieved passages, distinguish explicit rules from interpretation, and cite the source filename and PDF page. If the retrieved evidence is insufficient, say so rather than inventing a rule.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 900,
+          "requireToolCall": true,
+          "outputMode": "text"
+        }
+      }
+    },
+    {
+      "id": "mage-rag-search",
+      "type": "synapseNode",
+      "position": { "x": 390, "y": 520 },
+      "data": {
+        "kind": "search",
+        "label": "Mage Rules RAG",
+        "description": "Retrieves rules passages from the local indexed Mage PDF collection.",
+        "inputType": "tool_request",
+        "outputType": "tool_result",
+        "config": {
+          "provider": "localrag",
+          "searchMode": "assisted",
+          "functionName": "search_mage_rules",
+          "functionDescription": "Search the indexed Mage RPG rulebooks for passages needed to answer a rules question.",
+          "usageInstructions": "Use a focused rules query containing the relevant Sphere, action, mechanic, or game term. Ground the answer in retrieved passages and preserve filename and PDF page citations.",
+          "maxResults": 5,
+          "searchContextSize": "low",
+          "allowedDomains": "",
+          "blockedDomains": "",
+          "customEndpoint": "https://api.example.com/search?q={{query}}&limit={{limit}}",
+          "localIndexPath": "C:\\Users\\Raymond\\Desktop\\Mage RPG\\Rules PDFs\\PDFs for RAG\\Files Ready for RAG search\\Mage-RPG-Rules.synapse-rag.sqlite"
+        }
+      }
+    },
+    {
+      "id": "mage-rag-output",
+      "type": "synapseNode",
+      "position": { "x": 740, "y": 250 },
+      "data": {
+        "kind": "output",
+        "label": "Grounded Rules Answer",
+        "description": "Captures the cited rules answer.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {}
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "mage-rag-trigger-agent",
+      "source": "mage-rag-trigger",
+      "target": "mage-rag-agent",
+      "channel": "trigger"
+    },
+    {
+      "id": "mage-rag-agent-search",
+      "source": "mage-rag-agent",
+      "target": "mage-rag-search",
+      "channel": "tool"
+    },
+    {
+      "id": "mage-rag-agent-output",
+      "source": "mage-rag-agent",
+      "target": "mage-rag-output",
+      "channel": "data"
+    }
+  ],
+  "metadata": {
+    "createdBy": "Synapse Flow Local RAG example builder",
+    "purpose": "Demonstrate grounded retrieval from a local three-PDF Mage rules index."
+  }
+}

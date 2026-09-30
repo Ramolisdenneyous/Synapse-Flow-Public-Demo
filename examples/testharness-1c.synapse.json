@@ -1,0 +1,221 @@
+{
+  "version": 1,
+  "name": "testHarness 1c",
+  "nodes": [
+    {
+      "id": "starter-trigger",
+      "type": "synapseNode",
+      "position": {
+        "x": 70,
+        "y": 230
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Start Brief",
+        "description": "Starts a run with a defined event.",
+        "inputType": "none",
+        "outputType": "event",
+        "config": {
+          "payload": "Draft a concise launch checklist for a prototype agent harness."
+        },
+        "status": "idle",
+        "lastOutput": ""
+      },
+      "measured": {
+        "width": 202,
+        "height": 74
+      }
+    },
+    {
+      "id": "starter-agent",
+      "type": "synapseNode",
+      "position": {
+        "x": 350,
+        "y": 180
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Planner",
+        "description": "Uses an LLM to reason over its event and allowed context.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "Turn the request into a concise, ordered checklist. Return only the checklist.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 700
+        },
+        "status": "idle",
+        "lastOutput": ""
+      },
+      "measured": {
+        "width": 202,
+        "height": 74
+      }
+    },
+    {
+      "id": "starter-memory",
+      "type": "synapseNode",
+      "position": {
+        "x": 350,
+        "y": 390
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Run Notes",
+        "description": "Stores isolated state through explicit read and write edges.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "lastOutput": ""
+      },
+      "measured": {
+        "width": 202,
+        "height": 74
+      }
+    },
+    {
+      "id": "starter-logic",
+      "type": "synapseNode",
+      "position": {
+        "x": 650,
+        "y": 180
+      },
+      "data": {
+        "kind": "logic",
+        "label": "Pass Through",
+        "description": "Routes or transforms events with deterministic rules.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "operation": "passthrough",
+          "rules": "* => Review Output",
+          "template": "{{input}}"
+        },
+        "status": "idle",
+        "lastOutput": ""
+      },
+      "measured": {
+        "width": 202,
+        "height": 74
+      }
+    },
+    {
+      "id": "starter-output",
+      "type": "synapseNode",
+      "position": {
+        "x": 940,
+        "y": 180
+      },
+      "data": {
+        "kind": "output",
+        "label": "Review Output",
+        "description": "Captures the final event for inspection.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {},
+        "status": "idle",
+        "lastOutput": ""
+      },
+      "measured": {
+        "width": 202,
+        "height": 74
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-start-agent",
+      "source": "starter-trigger",
+      "target": "starter-agent",
+      "type": "smoothstep",
+      "label": "trigger",
+      "data": {
+        "channel": "trigger"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#e6b84a"
+      },
+      "style": {
+        "stroke": "#e6b84a",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-agent-memory",
+      "source": "starter-agent",
+      "target": "starter-memory",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-memory-agent",
+      "source": "starter-memory",
+      "target": "starter-agent",
+      "type": "smoothstep",
+      "label": "read",
+      "data": {
+        "channel": "read"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#a78bd4"
+      },
+      "style": {
+        "stroke": "#a78bd4",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-agent-logic",
+      "source": "starter-agent",
+      "target": "starter-logic",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "edge-logic-output",
+      "source": "starter-logic",
+      "target": "starter-output",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      }
+    }
+  ]
+}

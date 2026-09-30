@@ -1,0 +1,362 @@
+{
+  "version": 1,
+  "name": "Three Player Blackjack",
+  "nodes": [
+    {
+      "id": "blackjack-next-round-trigger",
+      "type": "synapseNode",
+      "position": {
+        "x": 40,
+        "y": 340
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Deal Next Round",
+        "description": "Starts a fresh table or continues with the remaining deck after a completed round.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "payload": "DEAL_ROUND",
+          "continueState": true
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "blackjack-dealer",
+      "type": "synapseNode",
+      "position": {
+        "x": 340,
+        "y": 340
+      },
+      "data": {
+        "kind": "logic",
+        "label": "Dealer",
+        "description": "Owns the deck, deals cards, validates turns, plays the Dealer hand, and scores each round.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "operation": "generated",
+          "routerPrompt": "Run a standard single-deck blackjack table with one\ndeterministic Dealer and three Luna players named Player One, Player Two, and\nPlayer Three.\n\nThis prototype uses hit and stand only. It does not model betting, splits,\ndoubles, surrender, or insurance. A Dealer blackjack ends the round immediately.\n\nThe Dealer owns the authoritative shuffled deck, hands, card totals, action\ntokens, round number, legal actions, dealer play, and results. On DEAL_ROUND,\nreuse the remaining deck from private state. Shuffle a fresh 52-card deck only\nwhen no prior deck exists or fewer than 20 cards remain. Deal two cards to each\nplayer and the Dealer in table order.\n\nSend a public turn only to the active player and Table Display. The player must\nreturn strict JSON containing player, action \"hit\" or \"stand\", and the exact\nactionToken. Reject invalid or stale decisions and retry the same player without\nadvancing. Deal hits from the authoritative deck. Aces count as 11 or 1.\n\nAfter all players stand, bust, or have blackjack, the Dealer draws until 17 and\nstands on soft 17. Compare all three hands against the Dealer using blackjack,\nwin, loss, and push results. Send the final round only to Round Ledger and Table\nDisplay, with no continuation target so the queue stops.\n\nUse context.runtime.randomValue to shuffle. Keep the remaining deck and round\nnumber in private Router state so a continuation Trigger can start the next\nround from the same deck.",
+          "generatedCode": "function route(input, context, state) {\n  const players = [\n    { name: \"Player One\", id: \"blackjack-player-one\" },\n    { name: \"Player Two\", id: \"blackjack-player-two\" },\n    { name: \"Player Three\", id: \"blackjack-player-three\" }\n  ];\n  const ledgerId = \"blackjack-round-ledger\";\n  const outputId = \"blackjack-table-display\";\n\n  function shuffledDeck(randomValue) {\n    const suits = [\"S\", \"H\", \"D\", \"C\"];\n    const ranks = [\"A\", \"2\", \"3\", \"4\", \"5\", \"6\", \"7\", \"8\", \"9\", \"10\", \"J\", \"Q\", \"K\"];\n    const deck = [];\n    for (const suit of suits) {\n      for (const rank of ranks) deck.push(rank + suit);\n    }\n\n    let seed = Math.floor(randomValue * 4294967296) >>> 0;\n    function nextRandom() {\n      seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;\n      return seed / 4294967296;\n    }\n    for (let index = deck.length - 1; index > 0; index -= 1) {\n      const choice = Math.floor(nextRandom() * (index + 1));\n      const held = deck[index];\n      deck[index] = deck[choice];\n      deck[choice] = held;\n    }\n    return deck;\n  }\n\n  function rank(card) {\n    return String(card).slice(0, -1);\n  }\n\n  function handValue(hand) {\n    let total = 0;\n    let aces = 0;\n    for (const card of hand) {\n      const value = rank(card);\n      if (value === \"A\") {\n        total += 11;\n        aces += 1;\n      } else if ([\"K\", \"Q\", \"J\"].includes(value)) {\n        total += 10;\n      } else {\n        total += Number(value);\n      }\n    }\n    while (total > 21 && aces > 0) {\n      total -= 10;\n      aces -= 1;\n    }\n    return { total, soft: aces > 0 };\n  }\n\n  function parseDecision(value) {\n    if (value && typeof value === \"object\" && !Array.isArray(value)) return value;\n    const text = String(value || \"\").trim();\n    const start = text.indexOf(\"{\");\n    const end = text.lastIndexOf(\"}\");\n    if (start < 0 || end < start) return null;\n    try {\n      return JSON.parse(text.slice(start, end + 1));\n    } catch {\n      return null;\n    }\n  }\n\n  function nextToken(roundState, playerName) {\n    return (\n      \"round-\" +\n      roundState.round +\n      \"-action-\" +\n      roundState.actionNumber +\n      \"-\" +\n      playerName.replaceAll(\" \", \"-\").toLowerCase() +\n      \"-\" +\n      context.runtime.invocationId.slice(0, 8)\n    );\n  }\n\n  function publicTurn(roundState, event, type) {\n    const player = players[roundState.playerIndex];\n    const playerHand = roundState.hands[player.name];\n    const value = handValue(playerHand);\n    return {\n      type: type || \"player_turn\",\n      round: roundState.round,\n      shoe: roundState.shoe,\n      player: player.name,\n      hand: playerHand,\n      total: value.total,\n      soft: value.soft,\n      dealerUpCard: roundState.hands.Dealer[0],\n      dealerHiddenCards: Math.max(0, roundState.hands.Dealer.length - 1),\n      legalActions: [\"hit\", \"stand\"],\n      actionToken: roundState.actionToken,\n      cardsRemaining: roundState.deck.length,\n      lastEvent: event,\n      instruction: \"Return one strict JSON hit-or-stand decision.\"\n    };\n  }\n\n  function resultFor(playerName, roundState, dealerValue) {\n    const hand = roundState.hands[playerName];\n    const playerValue = handValue(hand).total;\n    const playerBlackjack = hand.length === 2 && playerValue === 21;\n    const dealerBlackjack = roundState.hands.Dealer.length === 2 && dealerValue === 21;\n    if (playerValue > 21) return \"loss\";\n    if (playerBlackjack && dealerBlackjack) return \"push\";\n    if (playerBlackjack) return \"blackjack\";\n    if (dealerBlackjack) return \"loss\";\n    if (dealerValue > 21) return \"win\";\n    if (playerValue > dealerValue) return \"win\";\n    if (playerValue < dealerValue) return \"loss\";\n    return \"push\";\n  }\n\n  function completeRound(roundState, event) {\n    const deck = roundState.deck.slice();\n    const dealerHand = roundState.hands.Dealer.slice();\n    let dealerValue = handValue(dealerHand);\n    while (dealerValue.total < 17 && deck.length > 0) {\n      dealerHand.push(deck.shift());\n      dealerValue = handValue(dealerHand);\n    }\n\n    const hands = { ...roundState.hands, Dealer: dealerHand };\n    const completed = {\n      ...roundState,\n      phase: \"round_complete\",\n      deck,\n      hands,\n      statuses: {\n        ...roundState.statuses,\n        Dealer: dealerValue.total > 21 ? \"bust\" : \"stand\"\n      }\n    };\n    const results = Object.fromEntries(\n      players.map((player) => [\n        player.name,\n        resultFor(player.name, completed, dealerValue.total)\n      ])\n    );\n    const totals = Object.fromEntries(\n      [\"Dealer\", ...players.map((player) => player.name)].map((name) => [\n        name,\n        handValue(hands[name]).total\n      ])\n    );\n    const payload = {\n      type: \"round_complete\",\n      round: completed.round,\n      shoe: completed.shoe,\n      hands,\n      totals,\n      results,\n      dealerStatus: completed.statuses.Dealer,\n      cardsRemaining: deck.length,\n      lastEvent: event,\n      message:\n        \"Round \" +\n        completed.round +\n        \" complete. Fire Deal Next Round to continue from the remaining \" +\n        deck.length +\n        \" cards.\"\n    };\n    return {\n      targetIds: [ledgerId, outputId],\n      payload,\n      state: { ...completed, results }\n    };\n  }\n\n  function activateNextPlayer(roundState, afterIndex, event) {\n    for (let index = afterIndex + 1; index < players.length; index += 1) {\n      const player = players[index];\n      if (roundState.statuses[player.name] !== \"waiting\") continue;\n      const nextState = {\n        ...roundState,\n        playerIndex: index,\n        actionNumber: roundState.actionNumber + 1,\n        statuses: { ...roundState.statuses, [player.name]: \"acting\" }\n      };\n      nextState.actionToken = nextToken(nextState, player.name);\n      return {\n        targetIds: [player.id, outputId],\n        payload: publicTurn(nextState, event),\n        state: nextState\n      };\n    }\n    return completeRound(roundState, event);\n  }\n\n  const startRequested =\n    String(input || \"\").trim().toUpperCase() === \"DEAL_ROUND\" ||\n    (input && typeof input === \"object\" && input.type === \"deal_round\");\n\n  if (startRequested) {\n    let deck = Array.isArray(state.deck) ? state.deck.slice() : [];\n    let shoe = Number(state.shoe) || 0;\n    let reshuffled = false;\n    if (deck.length < 20) {\n      deck = shuffledDeck(context.runtime.randomValue);\n      shoe += 1;\n      reshuffled = true;\n    }\n\n    const hands = {\n      Dealer: [],\n      \"Player One\": [],\n      \"Player Two\": [],\n      \"Player Three\": []\n    };\n    const dealOrder = [...players.map((player) => player.name), \"Dealer\"];\n    for (let pass = 0; pass < 2; pass += 1) {\n      for (const name of dealOrder) hands[name].push(deck.shift());\n    }\n\n    const statuses = { Dealer: \"hidden\" };\n    for (const player of players) {\n      statuses[player.name] =\n        handValue(hands[player.name]).total === 21 ? \"blackjack\" : \"waiting\";\n    }\n    const roundState = {\n      initialized: true,\n      phase: \"players\",\n      shoe,\n      round: (Number(state.round) || 0) + 1,\n      deck,\n      hands,\n      statuses,\n      playerIndex: -1,\n      actionNumber: 0,\n      actionToken: \"\",\n      reshuffled\n    };\n    if (handValue(hands.Dealer).total === 21) {\n      return completeRound(roundState, {\n        kind: \"dealer_blackjack\",\n        message: \"The Dealer has blackjack.\"\n      });\n    }\n    return activateNextPlayer(roundState, -1, {\n      kind: \"round_dealt\",\n      reshuffled,\n      message: reshuffled\n        ? \"A fresh deck was shuffled and the round was dealt.\"\n        : \"The round was dealt from the remaining deck.\"\n    });\n  }\n\n  if (!state.initialized || state.phase !== \"players\") {\n    return { drop: true, payload: input, state };\n  }\n\n  const currentPlayer = players[state.playerIndex];\n  const decision = parseDecision(input);\n  const action = String(decision && decision.action || \"\").toLowerCase();\n  const valid =\n    decision &&\n    decision.player === currentPlayer.name &&\n    decision.actionToken === state.actionToken &&\n    [\"hit\", \"stand\"].includes(action);\n\n  if (!valid) {\n    return {\n      targetIds: [currentPlayer.id, outputId],\n      payload: publicTurn(\n        state,\n        {\n          kind: \"invalid_decision\",\n          message: \"Use the exact player, actionToken, and a legal action.\"\n        },\n        \"retry\"\n      ),\n      state\n    };\n  }\n\n  const deck = state.deck.slice();\n  const hands = { ...state.hands };\n  const statuses = { ...state.statuses };\n  let event;\n\n  if (action === \"hit\") {\n    if (deck.length === 0) {\n      return completeRound(state, {\n        kind: \"deck_exhausted\",\n        message: \"The deck was exhausted before another card could be dealt.\"\n      });\n    }\n    const card = deck.shift();\n    hands[currentPlayer.name] = [...hands[currentPlayer.name], card];\n    const value = handValue(hands[currentPlayer.name]).total;\n    event = {\n      kind: value > 21 ? \"player_bust\" : \"player_hit\",\n      player: currentPlayer.name,\n      card,\n      total: value,\n      message:\n        value > 21\n          ? currentPlayer.name + \" drew \" + card + \" and busted at \" + value + \".\"\n          : currentPlayer.name + \" drew \" + card + \" for \" + value + \".\"\n    };\n    if (value < 21) {\n      const nextState = {\n        ...state,\n        deck,\n        hands,\n        actionNumber: state.actionNumber + 1\n      };\n      nextState.actionToken = nextToken(nextState, currentPlayer.name);\n      return {\n        targetIds: [currentPlayer.id, outputId],\n        payload: publicTurn(nextState, event),\n        state: nextState\n      };\n    }\n    statuses[currentPlayer.name] = value > 21 ? \"bust\" : \"stand\";\n  } else {\n    statuses[currentPlayer.name] = \"stand\";\n    event = {\n      kind: \"player_stand\",\n      player: currentPlayer.name,\n      total: handValue(hands[currentPlayer.name]).total,\n      message:\n        currentPlayer.name +\n        \" stood at \" +\n        handValue(hands[currentPlayer.name]).total +\n        \".\"\n    };\n  }\n\n  return activateNextPlayer(\n    { ...state, deck, hands, statuses },\n    state.playerIndex,\n    event\n  );\n}",
+          "generatedSummary": "Runs one three-player blackjack round and retains the remaining deck for continuation.",
+          "generatedAt": "2026-07-30T00:00:00.000Z",
+          "generatedJobId": "blackjack-bootstrap",
+          "rules": "",
+          "template": "{{input}}"
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "blackjack-player-one",
+      "type": "synapseNode",
+      "position": {
+        "x": 700,
+        "y": 80
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Player One",
+        "description": "Chooses hit or stand for one blackjack hand using the Dealer state.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Player One, one of three players at a blackjack table.\n\nYou receive an authoritative player_turn or retry payload from the Dealer. It\ncontains your hand, total, whether the total is soft, the Dealer up-card,\nlegalActions, and actionToken.\n\nChoose exactly one legal action. Use sensible blackjack play:\n- Stand on hard 17 or higher.\n- Hit hard 11 or lower.\n- On hard 12, stand against Dealer 4 through 6 and otherwise hit.\n- On hard 13 through 16, stand against Dealer 2 through 6 and otherwise hit.\n- On soft totals below 18, hit; on soft 19 or higher, stand.\n- On soft 18, stand against Dealer 2 through 8 and otherwise hit.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"player\":\"Player One\",\"action\":\"hit\",\"actionToken\":\"TOKEN_FROM_INPUT\"}\n\nThe action must be \"hit\" or \"stand\". Copy actionToken exactly. Never invent,\ndeal, remove, or rename cards. The Dealer resolves all authoritative rules.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 160
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "blackjack-player-two",
+      "type": "synapseNode",
+      "position": {
+        "x": 700,
+        "y": 300
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Player Two",
+        "description": "Chooses hit or stand for one blackjack hand using the Dealer state.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Player Two, one of three players at a blackjack table.\n\nYou receive an authoritative player_turn or retry payload from the Dealer. It\ncontains your hand, total, whether the total is soft, the Dealer up-card,\nlegalActions, and actionToken.\n\nChoose exactly one legal action. Use sensible blackjack play:\n- Stand on hard 17 or higher.\n- Hit hard 11 or lower.\n- On hard 12, stand against Dealer 4 through 6 and otherwise hit.\n- On hard 13 through 16, stand against Dealer 2 through 6 and otherwise hit.\n- On soft totals below 18, hit; on soft 19 or higher, stand.\n- On soft 18, stand against Dealer 2 through 8 and otherwise hit.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"player\":\"Player Two\",\"action\":\"hit\",\"actionToken\":\"TOKEN_FROM_INPUT\"}\n\nThe action must be \"hit\" or \"stand\". Copy actionToken exactly. Never invent,\ndeal, remove, or rename cards. The Dealer resolves all authoritative rules.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 160
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "blackjack-player-three",
+      "type": "synapseNode",
+      "position": {
+        "x": 700,
+        "y": 520
+      },
+      "data": {
+        "kind": "agent",
+        "label": "Player Three",
+        "description": "Chooses hit or stand for one blackjack hand using the Dealer state.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "systemPrompt": "You are Player Three, one of three players at a blackjack table.\n\nYou receive an authoritative player_turn or retry payload from the Dealer. It\ncontains your hand, total, whether the total is soft, the Dealer up-card,\nlegalActions, and actionToken.\n\nChoose exactly one legal action. Use sensible blackjack play:\n- Stand on hard 17 or higher.\n- Hit hard 11 or lower.\n- On hard 12, stand against Dealer 4 through 6 and otherwise hit.\n- On hard 13 through 16, stand against Dealer 2 through 6 and otherwise hit.\n- On soft totals below 18, hit; on soft 19 or higher, stand.\n- On soft 18, stand against Dealer 2 through 8 and otherwise hit.\n\nReturn exactly one JSON object with no Markdown and no extra text:\n{\"player\":\"Player Three\",\"action\":\"hit\",\"actionToken\":\"TOKEN_FROM_INPUT\"}\n\nThe action must be \"hit\" or \"stand\". Copy actionToken exactly. Never invent,\ndeal, remove, or rename cards. The Dealer resolves all authoritative rules.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 160
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "blackjack-round-ledger",
+      "type": "synapseNode",
+      "position": {
+        "x": 1080,
+        "y": 220
+      },
+      "data": {
+        "kind": "memory",
+        "label": "Round Ledger",
+        "description": "Appends each completed round and persists it across continuation fires.",
+        "inputType": "memory_write",
+        "outputType": "memory_read",
+        "config": {
+          "operation": "append",
+          "initialValue": ""
+        },
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    },
+    {
+      "id": "blackjack-table-display",
+      "type": "synapseNode",
+      "position": {
+        "x": 1080,
+        "y": 400
+      },
+      "data": {
+        "kind": "output",
+        "label": "Table Display",
+        "description": "Shows the current player turn and the completed round result.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {},
+        "status": "idle",
+        "activity": "",
+        "lastOutput": "",
+        "outputHistory": [],
+        "memoryEntries": []
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "blackjack-edge-trigger-dealer",
+      "source": "blackjack-next-round-trigger",
+      "target": "blackjack-dealer",
+      "type": "smoothstep",
+      "label": "trigger",
+      "data": {
+        "channel": "trigger"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#e6b84a"
+      },
+      "style": {
+        "stroke": "#e6b84a",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "blackjack-edge-dealer-one",
+      "source": "blackjack-dealer",
+      "target": "blackjack-player-one",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "blackjack-edge-dealer-two",
+      "source": "blackjack-dealer",
+      "target": "blackjack-player-two",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "blackjack-edge-dealer-three",
+      "source": "blackjack-dealer",
+      "target": "blackjack-player-three",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "blackjack-edge-one-dealer",
+      "source": "blackjack-player-one",
+      "target": "blackjack-dealer",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "blackjack-edge-two-dealer",
+      "source": "blackjack-player-two",
+      "target": "blackjack-dealer",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "blackjack-edge-three-dealer",
+      "source": "blackjack-player-three",
+      "target": "blackjack-dealer",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "blackjack-edge-dealer-ledger",
+      "source": "blackjack-dealer",
+      "target": "blackjack-round-ledger",
+      "type": "smoothstep",
+      "label": "write",
+      "data": {
+        "channel": "write"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#8d70bd"
+      },
+      "style": {
+        "stroke": "#8d70bd",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    },
+    {
+      "id": "blackjack-edge-dealer-display",
+      "source": "blackjack-dealer",
+      "target": "blackjack-table-display",
+      "type": "smoothstep",
+      "label": "data",
+      "data": {
+        "channel": "data"
+      },
+      "markerEnd": {
+        "type": "arrowclosed",
+        "color": "#7e8a91"
+      },
+      "style": {
+        "stroke": "#7e8a91",
+        "strokeWidth": 2
+      },
+      "animated": false,
+      "selected": false
+    }
+  ]
+}

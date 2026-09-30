@@ -1,0 +1,133 @@
+{
+  "format": "synapse-flow/harness",
+  "version": 2,
+  "name": "User Input - Manual and Auto Demo",
+  "nodes": [
+    {
+      "id": "user-demo-start",
+      "type": "synapseNode",
+      "position": {
+        "x": 80,
+        "y": 250
+      },
+      "data": {
+        "kind": "trigger",
+        "label": "Present Situation",
+        "description": "Begins a single participant-response test.",
+        "inputType": "event",
+        "outputType": "event",
+        "config": {
+          "payload": "The prototype asks how you want to proceed.",
+          "continueState": false
+        }
+      }
+    },
+    {
+      "id": "user-demo-scene",
+      "type": "synapseNode",
+      "position": {
+        "x": 370,
+        "y": 250
+      },
+      "data": {
+        "kind": "tool",
+        "label": "Situation Report",
+        "description": "Provides fixed observable context before the user turn.",
+        "inputType": "tool_request",
+        "outputType": "tool_result",
+        "config": {
+          "mode": "mock",
+          "mockResponse": "The status panel shows one safe option and one experimental option. Which approach should the prototype take?",
+          "behaviorPrompt": ""
+        }
+      }
+    },
+    {
+      "id": "user-demo-observer",
+      "type": "synapseNode",
+      "position": {
+        "x": 680,
+        "y": 90
+      },
+      "data": {
+        "kind": "output",
+        "label": "Visible Situation",
+        "description": "Captures the situation so User Input can observe it through a read edge.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {}
+      }
+    },
+    {
+      "id": "user-demo-participant",
+      "type": "synapseNode",
+      "position": {
+        "x": 680,
+        "y": 330
+      },
+      "data": {
+        "kind": "user",
+        "label": "Participant Response",
+        "description": "Waits for human prose in Manual mode or simulates the participant in Auto mode.",
+        "inputType": "event",
+        "outputType": "message",
+        "config": {
+          "mode": "manual",
+          "systemPrompt": "You are a thoughtful prototype tester. Explain which approach you would choose and why in two or three natural prose sentences.",
+          "reasoningEffort": "low",
+          "maxOutputTokens": 400
+        }
+      }
+    },
+    {
+      "id": "user-demo-result",
+      "type": "synapseNode",
+      "position": {
+        "x": 1000,
+        "y": 330
+      },
+      "data": {
+        "kind": "output",
+        "label": "Recorded Response",
+        "description": "Captures the completed manual or automated prose response.",
+        "inputType": "event",
+        "outputType": "none",
+        "config": {}
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "user-demo-edge-start-scene",
+      "source": "user-demo-start",
+      "target": "user-demo-scene",
+      "channel": "trigger"
+    },
+    {
+      "id": "user-demo-edge-scene-observer",
+      "source": "user-demo-scene",
+      "target": "user-demo-observer",
+      "channel": "data"
+    },
+    {
+      "id": "user-demo-edge-scene-participant",
+      "source": "user-demo-scene",
+      "target": "user-demo-participant",
+      "targetHandle": "input",
+      "channel": "data"
+    },
+    {
+      "id": "user-demo-edge-observer-read",
+      "source": "user-demo-observer",
+      "target": "user-demo-participant",
+      "targetHandle": "read",
+      "channel": "read"
+    },
+    {
+      "id": "user-demo-edge-participant-result",
+      "source": "user-demo-participant",
+      "target": "user-demo-result",
+      "channel": "data"
+    }
+  ]
+}
