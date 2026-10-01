@@ -4,7 +4,7 @@ import OpenAI from 'openai';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { DemoBudget } from './demoBudget.js';
+import { DemoBudget, resolveDemoClientId } from './demoBudget.js';
 import { buildAssistantResponse } from './assistant.js';
 import { executeRouterCode, withRouterRuntime } from './routerSandbox.js';
 import { runSearch } from './searchProviders.js';
@@ -24,6 +24,12 @@ const requestWindow = new Map();
 
 app.disable('x-powered-by');
 app.use(express.json({ limit: '1mb' }));
+app.use((request, response, next) => {
+  const { clientId } = resolveDemoClientId(request.get('X-Demo-Client-Id'));
+  request.demoClientId = clientId;
+  response.setHeader('X-Demo-Client-Id', clientId);
+  next();
+});
 
 function rateLimit(limit) {
   return (request, response, next) => {
@@ -41,21 +47,26 @@ function boundedText(value, maxLength) {
   return String(value || '').slice(0, maxLength);
 }
 
-async function reserveModelCall(text, maxOutputTokens) {
+async function reserveModelCall(clientId, text, maxOutputTokens) {
   // Terra prices are intentionally used as a conservative ceiling for every
   // model call, including lower-cost Luna simulation calls.
   const estimate = budget.estimate({ inputTokens: Math.ceil(text.length / 4), maxOutputTokens });
-  return budget.reserve(estimate);
+  return budget.reserve(clientId, estimate);
 }
 
-app.get('/api/health', async (_request, response) => {
+app.get('/api/health', async (request, response) => {
   await budget.load();
-  response.json({ ok: true, provider: 'OpenAI', model, assistantModel, configured: Boolean(apiKey), publicDemo: true, budget: budget.snapshot() });
+  response.json({ ok: true, provider: 'OpenAI', model, assistantModel, configured: Boolean(apiKey), publicDemo: true, budget: budget.snapshot(request.demoClientId) });
 });
 
-app.get('/api/budget', async (_request, response) => {
+app.get('/api/budget', async (request, response) => {
   await budget.load();
-  response.json(budget.snapshot());
+  response.json(budget.snapshot(request.demoClientId));
+});
+
+app.post('/api/demo/reset', async (request, response) => {
+  const snapshot = await budget.reset(request.demoClientId);
+  response.json({ ok: true, budget: snapshot });
 });
 
 app.post('/api/assistant', rateLimit(12), async (request, response) => {
@@ -66,13 +77,13 @@ app.post('/api/assistant', rateLimit(12), async (request, response) => {
   const maxOutputTokens = body.action === 'generate_router' ? 2600 : 900;
   let reservation;
   try {
-    reservation = await reserveModelCall(serialized, maxOutputTokens);
+    reservation = await reserveModelCall(request.demoClientId, serialized, maxOutputTokens);
     const result = await buildAssistantResponse({ client, model: assistantModel, request: body });
-    const snapshot = await budget.settle(reservation, result.response.usage);
+    const snapshot = await budget.settle(request.demoClientId, reservation, result.response.usage);
     return response.json({ message: result.message, action: result.action, router: result.router || null, usage: result.response.usage || null, budget: snapshot });
   } catch (error) {
-    if (reservation) await budget.release(reservation);
-    return response.status(error?.status || 422).json({ error: error?.message || 'The assistant request failed.', budget: budget.snapshot() });
+    if (reservation) await budget.release(request.demoClientId, reservation);
+    return response.status(error?.status || 422).json({ error: error?.message || 'The assistant request failed.', budget: budget.snapshot(request.demoClientId) });
   }
 });
 
@@ -99,14 +110,14 @@ app.post('/api/llm', rateLimit(50), async (request, response) => {
   const toolOutputs = Array.isArray(body.toolOutputs) ? body.toolOutputs.slice(0, 8).map((item) => ({ type: 'function_call_output', call_id: boundedText(item?.callId, 120), output: boundedText(item?.output, 12_000) })) : [];
   let reservation;
   try {
-    reservation = await reserveModelCall(JSON.stringify({ prompt, systemPrompt, tools, toolOutputs }), maxOutputTokens);
+    reservation = await reserveModelCall(request.demoClientId, JSON.stringify({ prompt, systemPrompt, tools, toolOutputs }), maxOutputTokens);
     const result = await client.responses.create({ model, instructions: systemPrompt || 'Return only the requested simulation output.', input: toolOutputs.length ? toolOutputs : prompt, reasoning: { effort }, text: { verbosity: 'low' }, max_output_tokens: maxOutputTokens, ...(tools.length ? { tools, tool_choice: 'auto', parallel_tool_calls: false } : {}), ...(body.previousResponseId ? { previous_response_id: boundedText(body.previousResponseId, 200) } : {}) });
-    const snapshot = await budget.settle(reservation, result.usage);
+    const snapshot = await budget.settle(request.demoClientId, reservation, result.usage);
     const toolCalls = (result.output || []).filter((item) => item.type === 'function_call').map((item) => ({ id: item.id || null, callId: item.call_id, name: item.name, arguments: item.arguments }));
     return response.json({ text: result.output_text || '', responseId: result.id, model: result.model || model, usage: result.usage || null, toolCalls, budget: snapshot });
   } catch (error) {
-    if (reservation) await budget.release(reservation);
-    return response.status(error?.status || 422).json({ error: error?.message || 'The OpenAI request failed.', budget: budget.snapshot() });
+    if (reservation) await budget.release(request.demoClientId, reservation);
+    return response.status(error?.status || 422).json({ error: error?.message || 'The OpenAI request failed.', budget: budget.snapshot(request.demoClientId) });
   }
 });
 

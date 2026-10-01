@@ -49,6 +49,7 @@ import { Trash2 } from 'lucide-react';
 import { isPosition3d } from './three/graphLayout3d.js';
 
 const STORAGE_KEY = 'synapse-flow:public-demo';
+const DEMO_CLIENT_ID_KEY = 'synapse-flow:public-demo-client-id';
 const MAX_EVENTS = 200;
 const nodeTypes = { synapseNode: SynapseNode };
 const Graph3DCanvas = lazy(() => import('./components/Graph3DCanvas.jsx'));
@@ -65,6 +66,14 @@ function downloadText(filename, contents, type) {
 
 function now() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function getDemoClientId() {
+  const existing = localStorage.getItem(DEMO_CLIENT_ID_KEY);
+  if (existing) return existing;
+  const created = crypto.randomUUID();
+  localStorage.setItem(DEMO_CLIENT_ID_KEY, created);
+  return created;
 }
 
 function withoutRuntimeEdgeClasses(value = '') {
@@ -204,6 +213,19 @@ export default function App() {
   const sessionLogChainsRef = useRef(new Map());
   const routerEventSourcesRef = useRef(new Map());
   const edgeAnimationTokensRef = useRef(new Map());
+  const demoClientIdRef = useRef(getDemoClientId());
+
+  const demoFetch = useCallback(async (resource, options = {}) => {
+    const headers = new Headers(options.headers || {});
+    headers.set('X-Demo-Client-Id', demoClientIdRef.current);
+    const response = await fetch(resource, { ...options, headers });
+    const serverClientId = response.headers.get('X-Demo-Client-Id');
+    if (serverClientId && serverClientId !== demoClientIdRef.current) {
+      demoClientIdRef.current = serverClientId;
+      localStorage.setItem(DEMO_CLIENT_ID_KEY, serverClientId);
+    }
+    return response;
+  }, []);
 
   const releasePausedLoop = useCallback(() => {
     const waiters = resumeWaitersRef.current.splice(0);
@@ -358,14 +380,14 @@ export default function App() {
   }, [fitView, setEdges, setNodes]);
 
   useEffect(() => {
-    fetch('/api/health')
+    demoFetch('/api/health')
       .then((response) => response.json())
       .then((status) => {
         setServerStatus(status);
         setDemoBudget(status.budget || null);
       })
       .catch(() => setServerStatus({ configured: false, model: 'offline' }));
-  }, []);
+  }, [demoFetch]);
 
   const addLog = useCallback((type, nodeLabel, message, runSessionId = activeSessionRef.current, details = null) => {
     const entry = {
@@ -384,7 +406,7 @@ export default function App() {
         sessionLogChainsRef.current.get(runSessionId) || Promise.resolve();
       const next = previous
         .then(() =>
-          fetch(`/api/sessions/${runSessionId}/events`, {
+          demoFetch(`/api/sessions/${runSessionId}/events`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(entry),
@@ -393,7 +415,7 @@ export default function App() {
         .catch(() => {});
       sessionLogChainsRef.current.set(runSessionId, next);
     }
-  }, []);
+  }, [demoFetch]);
 
   const updateNodeRuntime = useCallback((nodeId, updates) => {
     setNodes((current) =>
@@ -442,7 +464,7 @@ export default function App() {
   }, [setEdges]);
 
   const callLLM = useCallback(async (payload) => {
-    const response = await fetch('/api/llm', {
+    const response = await demoFetch('/api/llm', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -452,10 +474,10 @@ export default function App() {
     if (body.budget) setDemoBudget(body.budget);
     if (!response.ok) throw new Error(body.error || 'Luna request failed.');
     return body;
-  }, []);
+  }, [demoFetch]);
 
   const callSearch = useCallback(async (payload) => {
-    const response = await fetch('/api/search', {
+    const response = await demoFetch('/api/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -464,10 +486,10 @@ export default function App() {
     const body = await readApiJson(response, 'API Search failed.');
     if (!response.ok) throw new Error(body.error || 'API Search failed.');
     return body;
-  }, []);
+  }, [demoFetch]);
 
   const runRouter = useCallback(async (payload) => {
-    const response = await fetch('/api/router/execute', {
+    const response = await demoFetch('/api/router/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -476,7 +498,7 @@ export default function App() {
     const body = await readApiJson(response, 'Generated router failed.');
     if (!response.ok) throw new Error(body.error || 'Generated router failed.');
     return body;
-  }, []);
+  }, [demoFetch]);
 
   const requestManualUserInput = useCallback(({
     node,
@@ -909,7 +931,7 @@ export default function App() {
       sessionLogChainsRef.current.get(runSessionId) || Promise.resolve();
     const finishWrite = pendingLogs
       .then(() =>
-        fetch(`/api/sessions/${runSessionId}/finish`, {
+        demoFetch(`/api/sessions/${runSessionId}/finish`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -931,7 +953,7 @@ export default function App() {
         sessionLogChainsRef.current.delete(runSessionId);
       }
     });
-  }, [addLog, cancelPendingUserInputs, releasePausedLoop]);
+  }, [addLog, cancelPendingUserInputs, demoFetch, releasePausedLoop]);
 
   const runLiveLoop = useCallback(async (runSessionId) => {
     const result = await drainParallel({
@@ -1079,7 +1101,7 @@ export default function App() {
     setRunning(true);
     setPaused(false);
     try {
-      await fetch('/api/sessions/start', {
+      await demoFetch('/api/sessions/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1121,6 +1143,7 @@ export default function App() {
   }, [
     addLog,
     cancelPendingUserInputs,
+    demoFetch,
     executionMode,
     finishRun,
     name,
@@ -1197,6 +1220,17 @@ export default function App() {
     releasePausedLoop();
   }, [addLog, releasePausedLoop]);
 
+  const resetDemoBudget = useCallback(async () => {
+    try {
+      const response = await demoFetch('/api/demo/reset', { method: 'POST' });
+      const body = await readApiJson(response, 'Demo budget reset failed.');
+      if (!response.ok) throw new Error(body.error || 'Demo budget reset failed.');
+      setDemoBudget(body.budget || null);
+    } catch (error) {
+      addLog('warning', 'Demo budget', error.message, null);
+    }
+  }, [addLog, demoFetch]);
+
   const newProject = useCallback(() => {
     const confirmed = window.confirm(
       'Start a blank harness? Unsaved canvas changes will be lost.',
@@ -1238,12 +1272,14 @@ export default function App() {
     setName('Untitled Harness');
     setNodes([]);
     setEdges([]);
+    void resetDemoBudget();
   }, [
     cancelPendingUserInputs,
     finishRun,
     releasePausedLoop,
     setEdges,
     setNodes,
+    resetDemoBudget,
   ]);
 
   const onConnect = useCallback((connection) => {
@@ -1324,7 +1360,7 @@ export default function App() {
       [nodeId]: { status: 'generating', message: 'Coding Agent is building the Router with Terra.' },
     }));
     try {
-      const response = await fetch('/api/assistant', {
+      const response = await demoFetch('/api/assistant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1358,7 +1394,7 @@ export default function App() {
       }));
       addLog('error', node.data.label, error.message);
     }
-  }, [addLog, logs, setNodes]);
+  }, [addLog, demoFetch, logs, setNodes]);
 
   const askAssistant = useCallback(async () => {
     const message = assistantDraft.trim();
@@ -1367,7 +1403,7 @@ export default function App() {
     setAssistantDraft('');
     setAssistantLoading(true);
     try {
-      const response = await fetch('/api/assistant', {
+      const response = await demoFetch('/api/assistant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'chat', message, selectedNode, nodes, edges, logs: logs.slice(-30) }),
@@ -1381,7 +1417,7 @@ export default function App() {
     } finally {
       setAssistantLoading(false);
     }
-  }, [assistantDraft, assistantLoading, edges, logs, nodes, selectedNode]);
+  }, [assistantDraft, assistantLoading, demoFetch, edges, logs, nodes, selectedNode]);
 
   const loadDemo = useCallback(async (demoId) => {
     const demo = DEMOS.find((candidate) => candidate.id === demoId);

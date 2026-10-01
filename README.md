@@ -7,7 +7,9 @@ coding assistant for router generation and graph help.
 ## Safety model
 
 - `OPENAI_API_KEY` exists only in the server environment.
-- The shared demo budget is conservatively enforced before every model request.
+- Every browser receives its own anonymous `$1` demo budget, identified by a
+  UUID stored in that browser's local storage. Clicking **New** resets only
+  that browser's demo budget.
   Set `OPENAI_DEMO_BUDGET_USD=1.00` for the portfolio deployment.
 - The budget state is persisted at `OPENAI_DEMO_DATA_DIR`; mount that directory
   to a Railway Volume at `/app/data` so redeploys do not reset the lock.
